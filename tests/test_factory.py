@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
 
 from flask import Flask
@@ -9,6 +10,7 @@ from conftest import FakeMsalClient, GraphTransportDouble, RedisDouble
 from msentraauth_template import create_app
 from msentraauth_template.auth.hooks import LocalUserRegistry
 from msentraauth_template.graph.client import GraphClient
+from msentraauth_template.settings import AppSettings
 
 
 def test_factory_registers_extensions_routes_and_security(
@@ -39,6 +41,32 @@ def test_factory_registers_extensions_routes_and_security(
         "/auth/callback",
         "/auth/logout",
     } <= routes
+
+
+def test_factory_registers_existing_app_registration_callback_alias(
+    settings: AppSettings,
+    redis_double: RedisDouble,
+    msal_runtime: tuple[FakeMsalClient, object],
+) -> None:
+    _, factory = msal_runtime
+    legacy_settings = replace(
+        settings,
+        redirect_uri="http://localhost:5000/getAToken",
+    )
+
+    app = create_app(
+        legacy_settings,
+        redis_client=redis_double,
+        msal_client_factory=factory,  # type: ignore[arg-type]
+        graph_transport=GraphTransportDouble(),
+    )
+
+    rules = {rule.rule: rule.endpoint for rule in app.url_map.iter_rules()}
+    assert rules["/getAToken"] == "msentraauth_template.callback_alias"
+    assert (
+        app.view_functions["msentraauth_template.callback_alias"]
+        is app.view_functions["ms_entra_auth.callback"]
+    )
 
 
 def test_full_login_graph_and_logout_flow(

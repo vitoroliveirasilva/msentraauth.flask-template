@@ -134,6 +134,16 @@ REDIS_URL=redis://localhost:6379/0
 
 A configuração falha cedo quando encontra placeholders, segredo curto, origem divergente, host não confiável, porta inválida, ausência de `User.Read` ou postura insegura de produção.
 
+### Callback existente no App Registration
+
+O caminho padrão da extensão é `/auth/callback`. Quando um App Registration existente não pode ser alterado e usa outro caminho na mesma origem, informe a URI exata no `.env`. Por exemplo:
+
+```dotenv
+MS_ENTRA_REDIRECT_URI=http://localhost:5000/getAToken
+```
+
+O template registra automaticamente esse caminho como alias do callback da extensão. A requisição é processada diretamente, sem redirecionamento intermediário, preservando `code`, `state` e todas as validações do fluxo.
+
 ## Produção
 
 Configuração mínima esperada:
