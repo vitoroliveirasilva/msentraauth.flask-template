@@ -76,7 +76,7 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 Edite `.env`, substitua todos os placeholders e inicie um Redis local. Depois execute:
 
 ```powershell
-flask --app wsgi:app run --debug
+python -m flask --app wsgi:app run --debug
 ```
 
 Acesse `http://localhost:5000`.
@@ -225,4 +225,4 @@ O índice completo está em [`docs/README.md`](docs/README.md). Consulte especia
 
 ## Licença e marcas
 
-Licenciado sob a [Licença MIT](LICENSE). Este é um projeto independente, não oficial e sem qualquer afiliação, manutenção ou endosso da Microsoft. Microsoft, Microsoft Entra, Microsoft Graph e MSAL são marcas registradas de seus respectivos proprietários.
+Distribuído sob a [Licença MIT](LICENSE). Este é um projeto independente e não oficial, sem afiliação, manutenção ou endosso da Microsoft.

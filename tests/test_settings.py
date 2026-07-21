@@ -149,6 +149,25 @@ def test_rejects_invalid_values(name: str, value: str, message: str) -> None:
         AppSettings.from_env(env)
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        (
+            "APP_SECRET_KEY",
+            "substitua-por-uma-chave-aleatoria-de-pelo-menos-32-caracteres",
+        ),
+        ("MS_ENTRA_CLIENT_ID", "substitua-pelo-client-id"),
+        ("MS_ENTRA_CLIENT_SECRET", "substitua-pelo-client-secret"),
+        ("MS_ENTRA_TENANT_ID", "substitua-pelo-tenant-id"),
+    ],
+)
+def test_rejects_documented_placeholders(name: str, value: str) -> None:
+    env = valid_env()
+    env[name] = value
+    with pytest.raises(SettingsError, match="placeholder"):
+        AppSettings.from_env(env)
+
+
 def test_requires_values_and_non_empty_csv() -> None:
     env = valid_env()
     env.pop("MS_ENTRA_CLIENT_ID")
