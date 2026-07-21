@@ -1,0 +1,179 @@
+name: Publish container
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Versão semântica existente no pyproject.toml
+        required: true
+        default: "1.0.0"
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-container-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    name: Build, publish and smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Resolve and validate version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          raw_version="${RELEASE_TAG:-${MANUAL_VERSION:-}}"
+          version="${raw_version#v}"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Versão inválida: $raw_version" >&2
+            exit 1
+          fi
+
+          package_version="$(python - <<'PY'
+          from pathlib import Path
+          import tomllib
+
+          data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          print(data["project"]["version"])
+          PY
+          )"
+
+          if [[ "$version" != "$package_version" ]]; then
+            echo "A versão solicitada ($version) difere do pyproject.toml ($package_version)." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate OCI metadata
+        id: metadata
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.tag }}
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=MS Entra Auth Flask Template
+            org.opencontainers.image.description=Template Flask de referência com Microsoft Entra ID, Redis e Microsoft Graph
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          annotations: ${{ steps.metadata.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Smoke test published image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          network="msentra-smoke-${GITHUB_RUN_ID}"
+          redis_container="msentra-redis-${GITHUB_RUN_ID}"
+          app_container="msentra-app-${GITHUB_RUN_ID}"
+
+          cleanup() {
+            docker rm -f "$app_container" "$redis_container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker pull "${IMAGE_NAME}:${VERSION}"
+          docker network create "$network"
+          docker run --detach --name "$redis_container" --network "$network" redis:8-alpine
+
+          docker run --detach \
+            --name "$app_container" \
+            --network "$network" \
+            --publish 18000:8000 \
+            --env APP_ENV=development \
+            --env APP_SECRET_KEY=container-smoke-session-secret-with-at-least-32-characters \
+            --env APP_BASE_URL=http://localhost:18000 \
+            --env APP_TRUSTED_HOSTS=localhost,127.0.0.1 \
+            --env APP_LOG_FORMAT=json \
+            --env MS_ENTRA_CLIENT_ID=container-smoke-client-id \
+            --env MS_ENTRA_CLIENT_SECRET=container-smoke-client-secret-with-at-least-24-characters \
+            --env MS_ENTRA_TENANT_ID=container-smoke.example.com \
+            --env MS_ENTRA_REDIRECT_URI=http://localhost:18000/auth/callback \
+            --env MS_ENTRA_SCOPES=User.Read \
+            --env REDIS_URL=redis://$redis_container:6379/0 \
+            --env REDIS_TLS_REQUIRED=false \
+            --env SESSION_COOKIE_SECURE=false \
+            --env WTF_CSRF_ENABLED=false \
+            "${IMAGE_NAME}:${VERSION}"
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:18000/health/live >/dev/null \
+              && curl --fail --silent --show-error http://127.0.0.1:18000/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs "$app_container"
+          exit 1
+
+      - name: Publish summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "## Imagem publicada"
+            echo
+            echo "- Imagem: \`${IMAGE_NAME}:${VERSION}\`"
+            echo "- Digest: \`${DIGEST}\`"
+            echo "- Plataformas: \`linux/amd64\`, \`linux/arm64\`"
+            echo "- SBOM e proveniência: incluídos"
+            echo "- Smoke test com Redis: aprovado"
+          } >> "$GITHUB_STEP_SUMMARY"
