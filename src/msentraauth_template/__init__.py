@@ -7,6 +7,7 @@ from flask import Flask
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .auth.hooks import LocalUserRegistry, register_auth_hooks
+from .callback_alias import register_callback_alias
 from .extensions import csrf, entra_auth
 from .graph.client import GraphClient, HttpTransport
 from .graph.routes import create_graph_blueprint
@@ -73,6 +74,7 @@ def create_app(
 
     app.register_blueprint(create_web_blueprint())
     app.register_blueprint(create_graph_blueprint(extension, graph))
+    register_callback_alias(app, resolved.redirect_uri)
     register_error_handlers(app)
     configure_security(app, resolved)
 

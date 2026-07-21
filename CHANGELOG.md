@@ -15,7 +15,8 @@
 - Testes unitários, integração cruzada e cobertura integral;
 - Docker multi-stage não-root, Redis e Gunicorn;
 - CI para Python 3.11 a 3.14, Redis real, pacote e imagem;
-- Dependabot para Python, GitHub Actions e Docker.
+- Dependabot para Python, GitHub Actions e Docker;
+- Alias seguro para callbacks legados definidos pelo App Registration, como `/getAToken`.
 
 ### Segurança
 

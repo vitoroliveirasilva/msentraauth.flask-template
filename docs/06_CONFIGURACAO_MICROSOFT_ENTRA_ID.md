@@ -29,6 +29,16 @@ https://seu-dominio/auth/logged-out
 
 A URI enviada deve corresponder ao registro (não use wildcard ou domínio não controlado).
 
+### App Registration existente com outro callback
+
+Quando o App Registration não puder ser alterado e já usar outro caminho na mesma origem, configure a URI exata em `MS_ENTRA_REDIRECT_URI`. Exemplo:
+
+```dotenv
+MS_ENTRA_REDIRECT_URI=http://localhost:5000/getAToken
+```
+
+O template registra esse caminho como alias direto da função de callback da extensão. Não há redirecionamento intermediário, e os parâmetros `code` e `state` continuam sendo validados pela extensão. O caminho não pode ser a raiz da aplicação nem colidir com outra rota `GET`.
+
 ## Credencial
 
 - Nunca em Git;
