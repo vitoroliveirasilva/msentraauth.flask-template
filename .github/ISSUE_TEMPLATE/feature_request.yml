@@ -1,0 +1,100 @@
+name: Solicitar uma melhoria
+description: Proponha uma evolução para o template, sua integração, segurança, experiência de desenvolvimento ou documentação.
+title: "FEAT - "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Descreva a necessidade e o resultado esperado. Antes de propor uma mudança, verifique se ela pertence ao template ou à extensão `flask-ms-entra-auth`.
+
+  - type: checkboxes
+    id: preliminary-checks
+    attributes:
+      label: Verificações iniciais
+      options:
+        - label: Pesquisei nas issues existentes e não encontrei uma solicitação equivalente.
+          required: true
+        - label: Confirmei que a proposta pertence ao template ou expliquei claramente a dependência da extensão.
+          required: true
+
+  - type: dropdown
+    id: affected-area
+    attributes:
+      label: Área relacionada
+      options:
+        - Configuração e inicialização Flask
+        - Login, callback ou logout
+        - Sessão Redis
+        - Microsoft Graph
+        - Vínculo ou autorização local
+        - Segurança e headers
+        - Observabilidade e logs
+        - Docker ou container
+        - CI, qualidade ou testes
+        - Experiência de desenvolvimento
+        - Documentação
+        - Outra
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema ou necessidade
+      description: Explique qual limitação, dificuldade ou oportunidade motivou a solicitação.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Solução desejada
+      description: Descreva o comportamento ou resultado esperado.
+    validations:
+      required: true
+
+  - type: textarea
+    id: usage-example
+    attributes:
+      label: Exemplo de uso
+      description: Inclua um fluxo, configuração ou exemplo de código sanitizado quando isso ajudar a compreender a proposta.
+      render: python
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+      description: Informe contornos atuais, abordagens descartadas ou soluções relacionadas.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impacto esperado
+      options:
+        - label: A proposta pode alterar variáveis de ambiente ou configuração pública.
+        - label: A proposta pode alterar o fluxo de autenticação, sessão ou logout.
+        - label: A proposta pode exigir mudança na extensão `flask-ms-entra-auth`.
+        - label: A proposta pode exigir atualização da imagem publicada no GHCR.
+        - label: A proposta pode introduzir requisito de migração para consumidores.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Contexto adicional
+      description: Inclua referências, diagramas ou outras informações relevantes.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: code-of-conduct
+    attributes:
+      label: Código de conduta
+      options:
+        - label: Concordo em seguir o código de conduta deste projeto.
+          required: true
