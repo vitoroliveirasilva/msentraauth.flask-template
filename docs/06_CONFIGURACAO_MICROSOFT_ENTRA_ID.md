@@ -11,7 +11,7 @@
 7. Criar client secret ou certificado;
 8. Guardar a credencial em secret manager.
 
-## URIs planejadas
+## URIs de referência
 
 Desenvolvimento:
 
@@ -27,7 +27,7 @@ https://seu-dominio/auth/callback
 https://seu-dominio/auth/logged-out
 ```
 
-A URI enviada deve corresponder ao registro (não usar wildcard ou domínio não controlado).
+A URI enviada deve corresponder ao registro (não use wildcard ou domínio não controlado).
 
 ## Credencial
 

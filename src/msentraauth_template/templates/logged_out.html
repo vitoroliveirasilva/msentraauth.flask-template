@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Sessão encerrada · MS Entra Auth{% endblock %}
+{% block content %}
+<section class="panel">
+  <p class="eyebrow">Logout local</p>
+  <h1>Sua sessão nesta aplicação foi encerrada</h1>
+  <p>Outras sessões Microsoft podem continuar ativas no navegador.</p>
+  <a class="button" href="{{ url_for('web.home') }}">Voltar ao início</a>
+</section>
+{% endblock %}

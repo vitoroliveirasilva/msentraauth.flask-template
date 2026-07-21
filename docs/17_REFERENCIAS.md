@@ -7,10 +7,6 @@
 - https://flask.palletsprojects.com/en/stable/web-security/
 - https://flask.palletsprojects.com/en/stable/deploying/
 
-## Flask-Session
-
-- https://flask-session.readthedocs.io/en/latest/security.html
-
 ## Microsoft Entra e MSAL
 
 - https://learn.microsoft.com/en-us/entra/msal/python/getting-started/acquiring-tokens

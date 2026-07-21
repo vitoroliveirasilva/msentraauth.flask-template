@@ -1,50 +1,17 @@
 # Critérios de aceite
 
-## Aplicação
-
-- Factory;
-- Config fail-fast;
-- Debug não hardcoded;
-- WSGI;
-- Rotas organizadas.
-
-## Extensão
-
-- Dependência normal;
-- Nenhum fluxo MSAL duplicado;
-- Identity sem token;
-- Reautenticação controlada.
-
-## Sessão
-
-- Server-side;
-- Cookies seguros em produção;
-- ID regenerado;
-- Logout limpa estado;
-- Múltiplos workers.
-
-## Graph
-
-- Timeout;
-- DTO;
-- Status tratados;
-- `$select`;
-- Token fora de logs.
-
-## Segurança
-
-- State inválido rejeitado;
-- Ppen redirect rejeitado;
-- Logout POST com CSRF;
-- Headers;
-- Secrets externos;
-- Scanners sem crítico não aceito.
-
-## Qualidade
-
-- Testes e cobertura;
-- Lint e typing;
-- Docs;
-- Imagem validada;
-- Health;
-- Operação documentada.
+| Critério                                 | Estado            |
+| ---------------------------------------- | ----------------- |
+| Factory sem estado global por usuário    | Atendido          |
+| Extensão 1.x como único motor OAuth/OIDC | Atendido          |
+| Sessão e cache server-side               | Atendido          |
+| Redis com consumo atômico                | Atendido          |
+| Hook local antes da sessão               | Atendido          |
+| Graph com timeout e DTO                  | Atendido          |
+| Token somente no servidor                | Atendido          |
+| CSRF, CSP e cookies seguros              | Atendido          |
+| Health e request ID                      | Atendido          |
+| Testes sem rede e Redis real na CI       | Atendido          |
+| Python 3.11 a 3.14                       | Configurado na CI |
+| Docker não-root                          | Atendido          |
+| Documentação e comandos coerentes        | Atendido          |

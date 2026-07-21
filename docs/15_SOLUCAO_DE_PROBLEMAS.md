@@ -1,46 +1,33 @@
 # Solução de problemas
 
-## Redirect URI incompatível
+## Pacote da extensão não encontrado
 
-Confirmar protocolo, host, porta, caminho e barra final no App Registration e na variável local.
+Confirme acesso ao PyPI e instale `flask-ms-entra-auth>=1.0,<2`. Para desenvolvimento conjunto, instale o repositório irmão em modo editável.
 
-## Secret inválido ou expirado
+## `SettingsError`
 
-Criar nova credencial, atualizar secret manager e revogar a anterior (não registrar o valor em log).
+Revise placeholders, tamanho dos secrets, HTTPS de produção, origem do redirect, host confiável, porta, `User.Read`, booleanos e URI Redis.
 
-## Login retorna state inválido
+## `/health/ready` retorna 503
 
-Verificar persistência da sessão, cookies, Redis, domínio, SameSite, proxy e múltiplas instâncias.
+Confirme `REDIS_URL`, DNS, porta, TLS, autenticação, CA, firewall e permissões do Redis. O endpoint não testa Microsoft Graph.
 
-## Usuário perde login entre requests
+## Callback ausente ou consumido
 
-Verificar se sessão é compartilhada, TTL, cookie, chave secreta consistente e balanceador.
+Verifique TTL, namespace, compartilhamento do Redis entre workers e suporte atômico. Não reutilize o mesmo callback.
 
-## Graph retorna 401
+## Graph retorna 401/403
 
-Solicitar token novamente pela extensão e não reutilizar token armazenado em usuário.
+Confirme consentimento de `User.Read`, conta do cache e App Registration. Refaça o login quando necessário e não registre a resposta bruta.
 
-## Graph retorna 403
+## Login retorna 400 localmente
 
-Verificar scope, consentimento e políticas do tenant.
+Use host permitido, redirect exatamente registrado e `APP_BASE_URL` coerente com o navegador. Uma requisição com host não confiável recebe `400` simples e não renderiza detalhes.
 
-## Graph retorna 429
+## Cookie desaparece após uma falha
 
-Respeitar `Retry-After`, reduzir chamadas e evitar retry agressivo.
+O comportamento é intencional quando assinatura, payload ou referência server-side é inválida. A aplicação remove o cookie obsoleto e exige uma nova sessão.
 
-## Callback funciona localmente e falha em produção
+## Produção inicia, mas URLs usam HTTP
 
-Verificar HTTPS, proxy, Host, redirect URI, cookies Secure e headers encaminhados.
-
-## Redis indisponível
-
-Readiness deve falhar e logs devem mostrar evento sanitizado. Verificar rede, DNS, TLS, credencial e limites.
-
-## Não usar como correção
-
-- Desligar validação de state;
-- Remover Secure em produção;
-- Logar token;
-- Usar `verify=False`;
-- Aumentar timeout indefinidamente;
-- Ativar debug público.
+Não ative `ProxyFix` por tentativa. Determine quantos proxies confiáveis escrevem cada header e configure somente os campos `PROXY_X_*` correspondentes.

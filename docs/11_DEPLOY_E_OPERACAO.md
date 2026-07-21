@@ -1,44 +1,32 @@
 # Deploy e operação
 
-## Servidor
+## Ordem
 
-Produção usa WSGI como Gunicorn em Linux ou servidor equivalente (o servidor de desenvolvimento não é opção de produção).
+1. Disponibilizar `flask-ms-entra-auth` 1.x no índice configurado;
+2. Configurar App Registration, secrets e redirect URI;
+3. Provisionar Redis privado, autenticado, persistente e preferencialmente com TLS;
+4. Construir a imagem do template;
+5. Executar atrás de proxy HTTPS conhecido;
+6. Configurar corretamente `PROXY_X_*`;
+7. Validar `/health/live` e `/health/ready`;
+8. Executar smoke test de login, perfil Graph e logout;
+9. Ativar métricas, alertas, backup e rotação de credenciais.
 
-## Topologia
+## Contêiner
 
-```text
-Cliente -> Proxy HTTPS -> WSGI Flask -> Redis
-                              |
-                              +-> Entra ID
-                              +-> Graph
-```
+O Dockerfile usa build multi-stage, Python slim, Gunicorn e UID/GID não-root. O access log utiliza somente o caminho da requisição, sem query string, para não registrar parâmetros do callback OAuth.
 
-## Proxy
+O Compose adiciona Redis persistente, health checks, reinício, filesystem read-only para a aplicação, `no-new-privileges`, remoção de capabilities da aplicação e rotação básica de logs.
 
-`ProxyFix` somente quando necessário e com número exato de proxies confiáveis (hosts devem ser validados).
+## Limites do Compose
 
-## Redis
+O Compose é referência local e de homologação. Ele não substitui:
 
-- Privado;
-- Autenticação;
-- TLS quando necessário;
-- Timeout curto;
-- TTL;
-- Sem exposição pública;
-- Monitoramento de memória.
-
-## Container
-
-- Imagem slim;
-- Usuário não root;
-- Build em estágios;
-- Sem `.env`;
-- Sem `.git`;
-- Health check;
-- Dependências reproduzíveis;
-- Scan de vulnerabilidade;
-- Filesystem read-only quando possível.
-
-## Timeouts
-
-Graph e Redis devem falhar antes do timeout do worker e proxy e load balancer precisam de valores coerentes.
+- Redis gerenciado ou clusterizado;
+- TLS e certificados de produção;
+- Secret manager;
+- Backup e restauração testados;
+- Limites e autoscaling do orquestrador;
+- Observabilidade centralizada;
+- WAF, rate limiting ou política de egress;
+- Estratégia de rollout e rollback.

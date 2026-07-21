@@ -1,49 +1,22 @@
 # Ambientes e configuração
 
-## Development
+A fonte de referência é `.env.example`. Nenhum valor sensível possui padrão operacional e placeholders causam falha de inicialização.
 
-- HTTP localhost permitido;
-- Logs legíveis;
-- Redis local;
-- Debug controlado pelo comando Flask, nunca hardcoded.
+## Desenvolvimento
 
-## Testing
+Loopback HTTP, cookie não-secure e Redis local são permitidos. CSRF pode ser desligado somente em testes automatizados.
 
-- Config isolada;
-- Credenciais fictícias;
-- MSAL e Graph mockados;
-- Storage descartável;
-- CSRF configurado conforme tipo de teste.
+## Produção
 
-## Production
+- `APP_BASE_URL` e redirect URI HTTPS na mesma origem;
+- Host da aplicação presente em `APP_TRUSTED_HOSTS`;
+- `SESSION_COOKIE_SECURE=true`;
+- Scret de sessão com pelo menos 32 caracteres aleatórios;
+- Client secret com pelo menos 24 caracteres;
+- `User.Read` em `MS_ENTRA_SCOPES`;
+- `REDIS_TLS_REQUIRED=true` e URI `rediss://`;
+- Portas válidas e URLs sem fragmentos ou credenciais onde não permitidas.
 
-- HTTPS;
-- Secret manager;
-- Redis privado;
-- Cookies seguros;
-- Debug desligado;
-- WSGI;
-- Hosts confiáveis;
-- Proxy configurado com contagens exatas.
+`ProxyFix` permanece desativado até que cada hop confiável seja declarado por `PROXY_X_*`. Valores acima de cinco são rejeitados para evitar configuração acidentalmente ampla.
 
-# Validação fail-fast
-
-A aplicação deve recusar inicialização quando faltar variável obrigatória, houver placeholder, URI inválida, secret curto ou configuração insegura de produção.
-
-# Fonte de configuração
-
-A factory recebe settings ou carrega ambiente e não deve importar objeto global configurado em import time.
-
-# Variáveis
-
-O catálogo está em [`.env.example`](../.env.example).
-
-- Variáveis específicas da extensão usam `MS_ENTRA_`;
-- variáveis da aplicação usam `APP_`, `SESSION_`, `REDIS_`, `GRAPH_` ou nomes claros.
-
-# Proibição
-
-- Fallback silencioso para produção;
-- Interpretar string `false` como verdadeira;
-- Confiar em `X-Forwarded-*` sem proxy conhecido;
-- Construir redirect URI a partir de Host não validado.
+Configuração inválida gera `SettingsError` antes de servir requisições.

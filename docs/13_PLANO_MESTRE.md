@@ -1,37 +1,13 @@
 # Plano mestre
 
-## Etapa 00: fundação
-
-Criar `pyproject.toml`, estrutura `src`, factory, settings, testes e WSGI.
-
-## Etapa 01: adoção da extensão
-
-Instalar localmente, configurar, registrar rotas e eliminar fluxo duplicado.
-
-## Etapa 02: sessão e usuário
-
-Redis, cookies, regeneração, identidade e hook local.
-
-## Etapa 03: Graph
-
-Cliente, DTO, timeout, erros e perfil.
-
-## Etapa 04: frontend
-
-Templates acessíveis, navegação, erros, CSRF, caminhos estáticos e CSP.
-
-## Etapa 05: observabilidade
-
-Request ID, logs, métricas e health.
-
-## Etapa 06: testes
-
-Unitários, integração, segurança e múltiplos workers.
-
-## Etapa 07: Docker e deploy
-
-Imagem, WSGI, proxy, Redis e operação.
-
-## Etapa 08: documentação executável
-
-Validar comandos, troubleshooting e exemplos.
+| Etapa | Escopo                                          | Estado    |
+| ----: | ----------------------------------------------- | --------- |
+|    00 | Fundação, `pyproject`, `src`, factory, WSGI     | Concluída |
+|    01 | Adoção da extensão e remoção de fluxo duplicado | Concluída |
+|    02 | Redis, sessão, identidade e hook local          | Concluída |
+|    03 | Cliente e perfil Microsoft Graph                | Concluída |
+|    04 | Frontend, CSRF, CSP e erros                     | Concluída |
+|    05 | Request ID, logs e health checks                | Concluída |
+|    06 | Testes unitários, integração e segurança        | Concluída |
+|    07 | Docker, Gunicorn, Redis e operação              | Concluída |
+|    08 | Documentação executável e troubleshooting       | Concluída |

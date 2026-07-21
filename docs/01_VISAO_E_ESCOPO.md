@@ -1,36 +1,21 @@
 # Visão e escopo
 
-## Propósito
+O template é uma aplicação Flask de referência que demonstra a extensão `flask-ms-entra-auth` em um cenário próximo de produção.
 
-Servir como aplicação Flask de referência, executável e didática para a extensão MS Entra Auth.
+## Incluído
 
-## Público
+- Application factory;
+- Sessão e storage Redis;
+- Login, callback, logout e identidade fornecidos pela extensão;
+- Vínculo local demonstrativo;
+- Perfil Microsoft Graph;
+- Interface Jinja, CSRF e headers;
+- Logs, health checks, testes, Gunicorn e Docker.
 
-- Desenvolvedores avaliando a extensão;
-- Equipes que precisam de um ponto de partida seguro;
-- Mantenedores que desejam comparar integração local e produção;
-- Estudantes de autenticação web server-side.
+## Fora do escopo
 
-## Objetivos
-
-1. Demonstrar o contrato público da extensão;
-2. Exibir configuração do Microsoft Entra ID;
-3. Provar sessão server-side e múltiplos workers;
-4. Mostrar integração mínima com Graph;
-5. Fornecer telas acessíveis e erros seguros;
-6. Oferecer testes reproduzíveis;
-7. Documentar operação.
-
-## Não objetivos
-
-- Ser extensão;
-- Esconder toda a configuração Microsoft;
-- Fornecer autorização completa;
-- Sincronizar grupos;
-- Suportar outros frameworks;
-- Criar App Registration automaticamente;
-- Representar aplicação oficial.
-
-## Critério de sucesso
-
-Uma pessoa deve conseguir clonar, configurar ambiente de desenvolvimento, registrar redirect URI, iniciar Redis, executar a app, autenticar e visualizar o perfil seguindo apenas a documentação da release.
+- Autorização empresarial, grupos e app roles;
+- Banco de usuários definitivo;
+- Graph genérica;
+- Multi-tenant, B2C/External ID e múltiplos provedores;
+- Gerenciamento de secrets ou infraestrutura cloud específica.

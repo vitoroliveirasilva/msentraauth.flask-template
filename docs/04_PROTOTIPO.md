@@ -1,20 +1,5 @@
-# Desenvolvimento do projeto
+# Protótipo e migração
 
-## Fase 1: estrutura
+Fluxos antigos ou utilitários MSAL duplicados não devem ser reintroduzidos.
 
-- Pacote `src`;
-- Factory e settings;
-- Testes.
-
-## Fase 2: extensão
-
-- Instalar extensão local;
-- Substituir login e callback;
-- Remover `UserStorage` e token do usuário.
-
-## Fase 3: Graph e interface
-
-- Cliente resiliente;
-- DTO;
-- Templates novos;
-- Erros seguros.
+Migrações de aplicações existentes devem ocorrer incrementalmente: configuração, extensão, Redis, hooks locais, Graph e por fim interface/operação. Cada passo precisa manter testes de login, callback, logout e falha de storage.

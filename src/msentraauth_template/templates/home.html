@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Início · MS Entra Auth{% endblock %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">Aplicação Flask de referência</p>
+  <h1>Microsoft Entra ID, Redis e Graph sem duplicar o protocolo</h1>
+  {% if identity %}
+  <p class="lead">Olá, {{ identity.display_name or identity.username or identity.object_id }}.</p>
+  <div class="actions">
+    <a class="button" href="{{ url_for('graph.profile') }}">Consultar Microsoft Graph</a>
+    <form method="post" action="{{ url_for('ms_entra_auth.logout') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="button secondary" type="submit">Encerrar sessão</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="lead">Entre para exercitar Authorization Code, sessão server-side, consumo atômico e perfil delegado</p>
+  <a class="button" href="{{ url_for('ms_entra_auth.login') }}">Entrar com Microsoft</a>
+  {% endif %}
+</section>
+<section class="feature-grid" aria-label="Recursos demonstrados">
+  <article class="panel">
+    <h2>Sessão server-side</h2>
+    <p>O navegador recebe apenas um identificador opaco assinado (o payload permanece no Redis).</p>
+  </article>
+  <article class="panel">
+    <h2>Graph no servidor</h2>
+    <p>O token delegado não é renderizado nem enviado ao frontend</p>
+  </article>
+  <article class="panel">
+    <h2>Segurança explícita</h2>
+    <p>CSRF, CSP, hosts confiáveis, cookies seguros, rotação de SID e configuração fail-fast</p>
+  </article>
+</section>
+{% endblock %}

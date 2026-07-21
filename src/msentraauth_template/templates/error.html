@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Erro {{ status_code or "" }} · MS Entra Auth{% endblock %}
+{% block content %}
+<section class="panel" role="alert">
+  <p class="eyebrow">Falha tratada{% if status_code %} · {{ status_code }}{% endif %}</p>
+  <h1>{{ title }}</h1>
+  <p>{{ message or "Tente novamente. Detalhes sensíveis não são exibidos nesta página." }}</p>
+  {% if request_id %}
+  <p class="request-reference">Referência: <code>{{ request_id }}</code></p>
+  {% endif %}
+  <a class="button" href="{{ url_for('web.home') }}">Voltar ao início</a>
+</section>
+{% endblock %}

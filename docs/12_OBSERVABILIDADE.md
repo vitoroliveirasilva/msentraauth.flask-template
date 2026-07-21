@@ -1,51 +1,12 @@
 # Observabilidade
 
-## Objetivos
+Cada requisição recebe request ID seguro. Um valor válido de `X-Request-ID` pode ser propagado e entradas inválidas são substituídas.
 
-Diagnosticar autenticação, sessão e dependências sem coletar credenciais ou PII além do necessário.
+Logs da aplicação usam mensagem constante e campos permitidos de método, endpoint, status e duração. Tokens, auth code, state, SID, claims e corpo Graph não entram nos logs. Em produção, `APP_LOG_FORMAT=json` facilita ingestão por plataformas de observabilidade.
 
-## Logs
+O access log do Gunicorn não usa a linha de requisição completa e omite deliberadamente a query string.
 
-Formato estruturado com:
+- `/health/live`: confirma que o processo Flask responde;
+- `/health/ready`: confirma que o Redis está acessível e que a aplicação pode sustentar sessão/autenticação.
 
-- Timestamp;
-- Nível;
-- Evento;
-- Request ID;
-- Rota;
-- Status;
-- Duração;
-- Correlation ID externo.
-
-## Eventos
-
-- Login iniciado e concluído;
-- Callback rejeitado;
-- Reautenticação;
-- Graph indisponível;
-- Rate limit;
-- Storage indisponível;
-- Logout;
-- Readiness.
-
-## Métricas
-
-- Sucesso e falha de login;
-- Latência Graph;
-- Status Graph;
-- Refresh de token;
-- `5xx`;
-- Disponibilidade Redis;
-- Duração de requests.
-
-## Alertas
-
-- Aumento de callback inválido;
-- Redis indisponível;
-- Graph 5xx elevado;
-- Secret próximo de expirar;
-- Auditoria de dependência falhando.
-
-## Privacidade
-
-Não usar email, object ID, token ou request ID como label de alta cardinalidade (definir retenção e acesso aos logs).
+Readiness não consulta Microsoft Entra ID nem Graph para evitar que uma indisponibilidade externa remova todas as instâncias saudáveis do balanceador.

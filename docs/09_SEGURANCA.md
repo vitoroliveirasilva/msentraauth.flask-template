@@ -1,47 +1,17 @@
 # Segurança
 
-- Autenticação delegada à extensão;
-- Sessão server-side;
-- Tokens fora do usuário e do navegador;
-- Configuração explícita;
-- Menor privilégio;
-- Erros sem detalhes internos;
-- Logs sem credenciais;
-- HTTPS em produção.
+- Sessão Redis com SID assinado, payload server-side e limite de 64 KiB;
+- Rotação do SID depois da autenticação para reduzir session fixation;
+- Descarte de cookies inválidos, expirados ou associados a payload corrompido;
+- Storage atômico Redis para transações de uso único;
+- CSRF em formulários e logout por POST;
+- CSP, HSTS em HTTPS, anti-frame, nosniff, COOP, CORP e Permissions Policy;
+- Trusted hosts e URLs externas validadas;
+- Request ID sanitizado;
+- Logs sem tokens, claims, SID, auth code, state ou corpo Graph;
+- Access log do Gunicorn sem query string;
+- Container não-root, filesystem read-only no Compose e `no-new-privileges`;
+- Microsoft Graph com escopo e campos mínimos;
+- Limite de corpo e quantidade de partes de formulário.
 
-## Controles
-
-| Risco | Controle |
-|---|---|
-| Login CSRF | State/nonce pela extensão |
-| Session fixation | Regenerar ID após login |
-| Cookie roubado | Secure, HttpOnly, SameSite |
-| Token vazado | Cache server-side e redação |
-| Open redirect | Destino local validado |
-| Host poisoning | TRUSTED_HOSTS e URI explícita |
-| Forced logout | POST + CSRF |
-| Clickjacking | CSP frame-ancestors e X-Frame-Options |
-| XSS | Autoescape, CSP e sem `safe` indevido |
-| Dependência vulnerável | Lock, auditoria e atualização |
-| Redis exposto | Rede privada, auth, TLS e TTL |
-
-## Headers
-
-- Content-Security-Policy;
-- Strict-Transport-Security em HTTPS completo;
-- X-Content-Type-Options;
-- X-Frame-Options;
-- Referrer-Policy;
-- Permissions-Policy.
-
-## Cookies
-
-Produção deve usar Secure, HttpOnly, SameSite Lax, nome exclusivo, TTL e rotação de sessão.
-
-## Logs proibidos
-
-Auth code, tokens, cookie, segredo, cache, claims completas e query string do callback.
-
-## Responsabilidade externa
-
-Políticas de Conditional Access, MFA, consentimento, rotação de secret e configuração do tenant precisam ser administradas fora do código.
+Autenticação não substitui autorização. O hook local demonstra vínculo e rotação de sessão, não papéis ou permissões.
