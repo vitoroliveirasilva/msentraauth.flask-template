@@ -20,24 +20,18 @@ def register_callback_alias(app: Flask, redirect_uri: str) -> None:
     if callback_path == _DEFAULT_CALLBACK_PATH:
         return
     if not callback_path or callback_path == "/":
-        raise CallbackAliasError(
-            "MS_ENTRA_REDIRECT_URI must contain a non-root callback path"
-        )
+        raise CallbackAliasError("MS_ENTRA_REDIRECT_URI must contain a non-root callback path")
 
     callback_view = app.view_functions.get(_CALLBACK_ENDPOINT)
     if callback_view is None:
-        raise CallbackAliasError(
-            "the Microsoft Entra callback endpoint is not registered"
-        )
+        raise CallbackAliasError("the Microsoft Entra callback endpoint is not registered")
 
     collision = any(
         rule.rule == callback_path and "GET" in (rule.methods or ())
         for rule in app.url_map.iter_rules()
     )
     if collision:
-        raise CallbackAliasError(
-            f"the callback path {callback_path!r} is already registered"
-        )
+        raise CallbackAliasError(f"the callback path {callback_path!r} is already registered")
 
     app.add_url_rule(
         callback_path,
