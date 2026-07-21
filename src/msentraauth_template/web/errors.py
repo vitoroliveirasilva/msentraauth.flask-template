@@ -32,15 +32,11 @@ def register_error_handlers(app: Flask) -> None:
 
     @app.errorhandler(MethodNotAllowed)
     def method_not_allowed(_: MethodNotAllowed) -> tuple[str, int]:
-        return _render(
-            "Método não permitido", "Use o método HTTP esperado por esta rota.", 405
-        )
+        return _render("Método não permitido", "Use o método HTTP esperado por esta rota.", 405)
 
     @app.errorhandler(RequestEntityTooLarge)
     def request_too_large(_: RequestEntityTooLarge) -> tuple[str, int]:
-        return _render(
-            "Requisição muito grande", "O conteúdo excede o limite aceito.", 413
-        )
+        return _render("Requisição muito grande", "O conteúdo excede o limite aceito.", 413)
 
     @app.errorhandler(500)
     def internal_error(_: object) -> tuple[str, int]:

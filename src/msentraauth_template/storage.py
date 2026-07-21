@@ -30,9 +30,7 @@ class RedisAuthStorage:
 
     def __init__(self, client: RedisClient) -> None:
         if not isinstance(client, RedisClient):
-            raise TypeError(
-                "client must provide the Redis operations used by the adapter"
-            )
+            raise TypeError("client must provide the Redis operations used by the adapter")
         self._client = client
 
     @property
@@ -49,9 +47,7 @@ class RedisAuthStorage:
     def save(self, key: str, value: bytes, *, ttl: int | None = None) -> None:
         if not isinstance(value, bytes):
             raise TypeError("value must be bytes")
-        if ttl is not None and (
-            isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0
-        ):
+        if ttl is not None and (isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0):
             raise ValueError("ttl must be a positive integer or None")
         try:
             result = self._client.set(key, value, ex=ttl)

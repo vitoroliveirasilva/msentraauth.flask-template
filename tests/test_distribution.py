@@ -31,9 +31,7 @@ def test_build_contains_application_assets_and_operational_files() -> None:
         assert "msentraauth_template/graph/client.py" in names
         assert "msentraauth_template/templates/home.html" in names
         assert "msentraauth_template/static/app.css" in names
-        metadata_name = next(
-            name for name in names if name.endswith(".dist-info/METADATA")
-        )
+        metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = wheel.read(metadata_name).decode()
         assert "Version: 1.0.0" in metadata
         assert "Requires-Dist: flask-ms-entra-auth<2,>=1.0" in metadata

@@ -59,9 +59,7 @@ def test_from_settings_creates_requests_session(
             self.mounts.append((prefix, adapter))
 
     transport = MountableTransport()
-    monkeypatch.setattr(
-        "msentraauth_template.graph.client.requests.Session", lambda: transport
-    )
+    monkeypatch.setattr("msentraauth_template.graph.client.requests.Session", lambda: transport)
     graph = GraphClient.from_settings(settings)  # type: ignore[arg-type]
     assert graph.get_profile("token").id == "graph-id"
     assert transport.mounts[0][0] == "https://"

@@ -184,9 +184,7 @@ class GraphTransportDouble:
             },
         )
         self.error: Exception | None = None
-        self.calls: list[
-            tuple[str, Mapping[str, str], Mapping[str, str], tuple[float, float]]
-        ] = []
+        self.calls: list[tuple[str, Mapping[str, str], Mapping[str, str], tuple[float, float]]] = []
 
     def get(
         self,

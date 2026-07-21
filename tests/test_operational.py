@@ -73,9 +73,7 @@ def test_graph_unauthorized_and_invalid_response_handlers(
     login = client.get("/auth/login")
     state = login.headers["Location"].split("state=", 1)[1]
     assert (
-        client.get(
-            "/auth/callback", query_string={"code": "code", "state": state}
-        ).status_code
+        client.get("/auth/callback", query_string={"code": "code", "state": state}).status_code
         == 302
     )
 

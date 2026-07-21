@@ -165,9 +165,7 @@ def test_prefix_payload_limits_and_backend_save_failures(
     assert oversized.sid != sid
     redis_double.forced_get = None
 
-    huge = RedisSession(
-        {"value": "x" * (64 * 1024)}, sid=interface._new_sid(), new=True
-    )
+    huge = RedisSession({"value": "x" * (64 * 1024)}, sid=interface._new_sid(), new=True)
     huge.modified = True
     with pytest.raises(SessionBackendError, match="too large"):
         interface.save_session(app, huge, Response())

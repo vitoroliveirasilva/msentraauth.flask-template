@@ -68,9 +68,7 @@ def register_auth_hooks(
         users.bind(identity)
         interface = current_app.session_interface
         if not isinstance(interface, RedisSessionInterface):
-            raise RuntimeError(
-                "the configured session interface cannot rotate session IDs"
-            )
+            raise RuntimeError("the configured session interface cannot rotate session IDs")
         interface.regenerate(current_app, session)
 
     @extension.on_logout

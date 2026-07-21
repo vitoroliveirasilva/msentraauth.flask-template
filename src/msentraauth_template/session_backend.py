@@ -86,9 +86,7 @@ class RedisSessionInterface(SessionInterface):
             return self._fresh_session(app, discard_cookie=True)
         return self.session_class(decoded, sid=sid, new=False)
 
-    def save_session(
-        self, app: Flask, session: SessionMixin, response: Response
-    ) -> None:
+    def save_session(self, app: Flask, session: SessionMixin, response: Response) -> None:
         if not isinstance(session, RedisSession):
             raise TypeError("session must be RedisSession")
         if session.accessed:
@@ -152,9 +150,7 @@ class RedisSessionInterface(SessionInterface):
         session.new = True
         session.modified = True
 
-    def _fresh_session(
-        self, app: Flask, *, discard_cookie: bool = False
-    ) -> RedisSession:
+    def _fresh_session(self, app: Flask, *, discard_cookie: bool = False) -> RedisSession:
         initial: dict[str, object] = {}
         if app.config.get("SESSION_PERMANENT", False):
             initial["_permanent"] = True

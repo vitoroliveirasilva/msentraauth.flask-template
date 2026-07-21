@@ -24,9 +24,7 @@ def test_factory_registers_extensions_routes_and_security(
         graph_transport=GraphTransportDouble(),
     )
     assert isinstance(app, Flask)
-    assert isinstance(
-        app.extensions["template_entra_auth"].audit_security(app), SecurityReport
-    )
+    assert isinstance(app.extensions["template_entra_auth"].audit_security(app), SecurityReport)
     assert isinstance(app.extensions["template_graph"], GraphClient)
     assert isinstance(app.extensions["template_users"], LocalUserRegistry)
     state = app.extensions["ms_entra_auth"]
@@ -66,9 +64,7 @@ def test_full_login_graph_and_logout_flow(
 
     login = client.get("/auth/login", query_string={"next": "/profile"})
     state = parse_qs(urlsplit(login.headers["Location"]).query)["state"][0]
-    callback = client.get(
-        "/auth/callback", query_string={"code": "code", "state": state}
-    )
+    callback = client.get("/auth/callback", query_string={"code": "code", "state": state})
     assert callback.status_code == 302
     assert callback.headers["Location"] == "/profile"
 
