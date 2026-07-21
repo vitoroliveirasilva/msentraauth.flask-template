@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Perfil · MS Entra Auth{% endblock %}
+{% block content %}
+<section class="panel">
+  <p class="eyebrow">Microsoft Graph</p>
+  <h1>{{ profile.display_name }}</h1>
+  <dl class="profile-grid">
+    <dt>Object ID</dt>
+    <dd><code>{{ identity.object_id }}</code></dd>
+    <dt>Tenant</dt>
+    <dd><code>{{ identity.tenant_id }}</code></dd>
+    <dt>Graph ID</dt>
+    <dd><code>{{ profile.id }}</code></dd>
+    <dt>Usuário</dt>
+    <dd>{{ profile.user_principal_name or "Não informado" }}</dd>
+    <dt>E-mail</dt>
+    <dd>{{ profile.mail or "Não informado" }}</dd>
+  </dl>
+  <form method="post" action="{{ url_for('ms_entra_auth.logout') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="button secondary" type="submit">Encerrar sessão local</button>
+  </form>
+</section>
+{% endblock %}

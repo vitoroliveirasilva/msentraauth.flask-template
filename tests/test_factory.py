@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+from urllib.parse import parse_qs, urlsplit
+
+from flask import Flask
+from flask_ms_entra_auth import AtomicAuthStorage, SecurityReport
+
+from conftest import FakeMsalClient, GraphTransportDouble, RedisDouble
+from msentraauth_template import create_app
+from msentraauth_template.auth.hooks import LocalUserRegistry
+from msentraauth_template.graph.client import GraphClient
+
+
+def test_factory_registers_extensions_routes_and_security(
+    settings: object,
+    redis_double: RedisDouble,
+    msal_runtime: tuple[FakeMsalClient, object],
+) -> None:
+    _, factory = msal_runtime
+    app = create_app(
+        settings,  # type: ignore[arg-type]
+        redis_client=redis_double,
+        msal_client_factory=factory,  # type: ignore[arg-type]
+        graph_transport=GraphTransportDouble(),
+    )
+    assert isinstance(app, Flask)
+    assert isinstance(app.extensions["template_entra_auth"].audit_security(app), SecurityReport)
+    assert isinstance(app.extensions["template_graph"], GraphClient)
+    assert isinstance(app.extensions["template_users"], LocalUserRegistry)
+    state = app.extensions["ms_entra_auth"]
+    assert isinstance(state.storage.backend, AtomicAuthStorage)
+    routes = {rule.rule for rule in app.url_map.iter_rules()}
+    assert {
+        "/",
+        "/profile",
+        "/health/live",
+        "/health/ready",
+        "/auth/login",
+        "/auth/callback",
+        "/auth/logout",
+    } <= routes
+
+
+def test_full_login_graph_and_logout_flow(
+    settings: object,
+    redis_double: RedisDouble,
+    msal_runtime: tuple[FakeMsalClient, object],
+) -> None:
+    msal_client, factory = msal_runtime
+    graph_transport = GraphTransportDouble()
+    app = create_app(
+        settings,  # type: ignore[arg-type]
+        redis_client=redis_double,
+        msal_client_factory=factory,  # type: ignore[arg-type]
+        graph_transport=graph_transport,
+    )
+    client = app.test_client()
+
+    anonymous = client.get("/")
+    assert anonymous.status_code == 200
+    assert "Entrar com Microsoft" in anonymous.text
+    protected = client.get("/profile")
+    assert protected.status_code == 302
+
+    login = client.get("/auth/login", query_string={"next": "/profile"})
+    state = parse_qs(urlsplit(login.headers["Location"]).query)["state"][0]
+    callback = client.get("/auth/callback", query_string={"code": "code", "state": state})
+    assert callback.status_code == 302
+    assert callback.headers["Location"] == "/profile"
+
+    profile = client.get("/profile", headers={"X-Request-ID": "request-12345678"})
+    assert profile.status_code == 200
+    assert "Template User" in profile.text
+    assert "graph-id" in profile.text
+    assert profile.headers["X-Request-ID"] == "request-12345678"
+    assert graph_transport.calls[0][1]["Authorization"] == "Bearer server-only-token"
+    assert app.extensions["template_users"].count() == 1
+    assert msal_client.cache is not None
+
+    home = client.get("/")
+    assert "Consultar Microsoft Graph" in home.text
+    logout = client.post("/auth/logout")
+    assert logout.status_code == 302
+    assert logout.headers["Location"] == "/logged-out"
+    assert "sessão nesta aplicação" in client.get("/logged-out").text
+
+
+def test_health_and_graph_error_handler(
+    settings: object,
+    redis_double: RedisDouble,
+    msal_runtime: tuple[FakeMsalClient, object],
+) -> None:
+    _, factory = msal_runtime
+    transport = GraphTransportDouble()
+    app = create_app(
+        settings,  # type: ignore[arg-type]
+        redis_client=redis_double,
+        msal_client_factory=factory,  # type: ignore[arg-type]
+        graph_transport=transport,
+    )
+    client = app.test_client()
+    assert client.get("/health/live").json == {"status": "ok"}
+    assert client.get("/health/ready").json == {"status": "ready"}
+    redis_double.fail = "ping"
+    unavailable = client.get("/health/ready")
+    assert unavailable.status_code == 503
+    assert unavailable.json == {"status": "unavailable"}
