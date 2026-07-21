@@ -16,7 +16,8 @@
 - Docker multi-stage não-root, Redis e Gunicorn;
 - CI para Python 3.11 a 3.14, Redis real, pacote e imagem;
 - Dependabot para Python, GitHub Actions e Docker;
-- Alias seguro para callbacks legados definidos pelo App Registration, como `/getAToken`.
+- Alias seguro para callbacks legados definidos pelo App Registration, como `/getAToken`;
+- Publicação versionada da imagem no GitHub Container Registry, com tags semânticas, SBOM, proveniência e smoke test com Redis.
 
 ### Segurança
 
