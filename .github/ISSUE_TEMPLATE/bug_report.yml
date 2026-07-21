@@ -1,0 +1,124 @@
+name: Relatar um erro
+description: Informe um comportamento incorreto, regressão ou falha reproduzível no template Flask.
+title: "FIX - "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por relatar o problema. Não inclua client secrets, tokens, cookies, códigos de autorização, dados pessoais ou respostas completas do Microsoft Graph.
+
+        Vulnerabilidades devem ser comunicadas pelo canal privado indicado em **Security > Report a vulnerability**.
+
+  - type: checkboxes
+    id: preliminary-checks
+    attributes:
+      label: Verificações iniciais
+      options:
+        - label: Pesquisei nas issues existentes e não encontrei um relato equivalente.
+          required: true
+        - label: Removi credenciais, tokens, cookies e dados pessoais das evidências.
+          required: true
+        - label: Confirmei que o problema pertence ao template e não exclusivamente à extensão `flask-ms-entra-auth`.
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Resumo do problema
+      description: Explique objetivamente o comportamento incorreto observado.
+      placeholder: Descreva o erro, a regressão ou a falha de integração.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected-area
+    attributes:
+      label: Área afetada
+      options:
+        - Inicialização e configuração Flask
+        - Login e callback do Microsoft Entra ID
+        - Logout e limpeza de sessão
+        - Sessão Redis
+        - Microsoft Graph
+        - Vínculo ou autorização local
+        - Headers e segurança do navegador
+        - Observabilidade e logs
+        - Docker ou container
+        - CI, qualidade ou testes
+        - Documentação
+        - Outra
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Passos para reprodução
+      description: Informe os passos mínimos necessários para reproduzir o problema.
+      placeholder: |
+        1. Configure...
+        2. Execute...
+        3. Acesse...
+        4. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Comportamento esperado
+      description: Explique qual deveria ser o resultado correto.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Comportamento observado
+      description: Explique o resultado atual, incluindo mensagens de erro sanitizadas.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Ambiente
+      description: Informe as versões e o modo de execução relevantes.
+      placeholder: |
+        Versão ou commit do template:
+        Versão da extensão flask-ms-entra-auth:
+        Python:
+        Flask:
+        Sistema operacional:
+        Execução local, Docker ou outro:
+        Redis:
+        Navegador, quando aplicável:
+    validations:
+      required: true
+
+  - type: textarea
+    id: sanitized-evidence
+    attributes:
+      label: Logs e evidências sanitizadas
+      description: Inclua traceback, logs ou capturas sem segredos e sem dados pessoais.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Contexto adicional
+      description: Inclua informações que possam ajudar na análise.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: code-of-conduct
+    attributes:
+      label: Código de conduta
+      options:
+        - label: Concordo em seguir o código de conduta deste projeto.
+          required: true
