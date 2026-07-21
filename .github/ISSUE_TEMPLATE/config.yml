@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Reportar vulnerabilidade
+    url: https://github.com/vitoroliveirasilva/msentraauth.flask-template/security/advisories/new
+    about: Use o canal privado para vulnerabilidades, credenciais expostas ou falhas de segurança.
+  - name: Documentação do template
+    url: https://github.com/vitoroliveirasilva/msentraauth.flask-template/tree/prod/docs
+    about: Consulte a documentação de configuração, execução e integração antes de abrir uma issue.
+  - name: Extensão flask-ms-entra-auth
+    url: https://github.com/vitoroliveirasilva/msentraauth.flask-extension
+    about: Use o repositório da extensão quando o problema estiver no pacote reutilizável de autenticação.
