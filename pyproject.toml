@@ -36,7 +36,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "bandit>=1.9.4,<2",
-  "build>=1.4.4,<1.5",
+  "build>=1.4.4,<1.6",
   "fakeredis>=2.36,<3",
   "mypy>=2.3,<3",
   "pip-audit>=2.10.1,<3",
