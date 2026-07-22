@@ -131,6 +131,8 @@ def test_defaults_and_redis_factory(monkeypatch: pytest.MonkeyPatch) -> None:
         "socket_connect_timeout": 3.0,
         "socket_timeout": 3.0,
         "health_check_interval": 30,
+        "ssl_cert_reqs": "required",
+        "ssl_check_hostname": True,
     }
 
 
@@ -163,6 +165,31 @@ def test_defaults_and_redis_factory(monkeypatch: pytest.MonkeyPatch) -> None:
         ("APP_BASE_URL", "http://localhost:0", "invalid port"),
         ("MS_ENTRA_SCOPES", "Mail.Read", "User.Read"),
         ("REDIS_URL", "https://example.test", "absolute"),
+        (
+            "REDIS_URL",
+            "redis://localhost:6379/0?decode_responses=true",
+            "application-controlled",
+        ),
+        (
+            "REDIS_URL",
+            "redis://localhost:6379/0?socket_timeout=0",
+            "application-controlled",
+        ),
+        (
+            "REDIS_URL",
+            "redis://localhost:6379/0?%64ecode_responses=true",
+            "application-controlled",
+        ),
+        (
+            "REDIS_URL",
+            "rediss://localhost:6380/0?ssl_cert_reqs=none",
+            "application-controlled",
+        ),
+        (
+            "REDIS_URL",
+            "rediss://localhost:6380/0?ssl_check_hostname=false",
+            "application-controlled",
+        ),
         ("GRAPH_BASE_URL", "http://localhost:5000/v1.0", "HTTPS"),
         ("GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0?tenant=x", "query"),
         ("MS_ENTRA_REDIRECT_URI", "http://localhost:5000/auth/call;back", "unsupported"),
@@ -208,6 +235,30 @@ def test_allows_placeholder_words_embedded_in_legitimate_values() -> None:
     assert settings.secret_key == env["APP_SECRET_KEY"]
     assert settings.client_secret == env["MS_ENTRA_CLIENT_SECRET"]
     assert settings.tenant_id == env["MS_ENTRA_TENANT_ID"]
+
+
+def test_non_tls_redis_factory_preserves_safe_url_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = valid_env()
+    env["REDIS_URL"] = "redis://localhost:6379/0?client_name=template"
+    captured: dict[str, object] = {}
+
+    def fake_from_url(url: str, **kwargs: object) -> object:
+        captured.update(url=url, **kwargs)
+        return object()
+
+    monkeypatch.setattr("msentraauth_template.settings.Redis.from_url", fake_from_url)
+    settings = AppSettings.from_env(env)
+
+    assert settings.create_redis_client() is not None
+    assert captured == {
+        "url": env["REDIS_URL"],
+        "decode_responses": False,
+        "socket_connect_timeout": 1.25,
+        "socket_timeout": 2.5,
+        "health_check_interval": 20,
+    }
 
 
 def test_requires_values_and_non_empty_csv() -> None:
@@ -360,6 +411,10 @@ def test_directly_constructed_settings_are_validated(settings: AppSettings) -> N
         ({"tenant_id": ""}, "MS_ENTRA_TENANT_ID"),
         ({"scopes": []}, "MS_ENTRA_SCOPES"),
         ({"redis_tls_required": "false"}, "REDIS_TLS_REQUIRED"),
+        (
+            {"redis_url": "redis://localhost:6379/0?decode_responses=true"},
+            "application-controlled",
+        ),
         ({"redis_health_check_interval": True}, "REDIS_HEALTH_CHECK_INTERVAL_SECONDS"),
         ({"redis_health_check_interval": "30"}, "REDIS_HEALTH_CHECK_INTERVAL_SECONDS"),
         ({"redis_health_check_interval": -1}, "REDIS_HEALTH_CHECK_INTERVAL_SECONDS"),
