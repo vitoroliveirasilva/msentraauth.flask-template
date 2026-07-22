@@ -20,6 +20,7 @@ class RedisDouble:
         self.return_invalid = False
         self.return_false = False
         self.forced_get: object | None = None
+        self.ping_result: object = True
 
     def _purge_if_expired(self, name: str) -> None:
         expires_at = self._expires_at.get(name)
@@ -37,11 +38,23 @@ class RedisDouble:
         self._purge_if_expired(name)
         return self._values.get(name)
 
-    def set(self, name: str, value: bytes, ex: int | None = None) -> object:
+    def set(
+        self,
+        name: str,
+        value: bytes,
+        ex: int | None = None,
+        *,
+        nx: bool = False,
+        xx: bool = False,
+    ) -> object:
         if self.fail == "set":
             raise RuntimeError("redis-secret")
         if self.return_false:
             return False
+        self._purge_if_expired(name)
+        exists = name in self._values
+        if (nx and exists) or (xx and not exists):
+            return None
         self._values[name] = bytes(value)
         if ex is None:
             self._expires_at.pop(name, None)
@@ -77,7 +90,7 @@ class RedisDouble:
     def ping(self) -> object:
         if self.fail == "ping":
             raise RuntimeError("redis-secret")
-        return True
+        return self.ping_result
 
     def expire(self, name: str, time: int) -> bool:
         self._purge_if_expired(name)

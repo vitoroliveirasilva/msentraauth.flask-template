@@ -3,9 +3,10 @@
 ## Implementado
 
 - Application factory em estrutura `src`;
-- Rxtensão `flask-ms-entra-auth` 1.x como único motor OAuth/OIDC;
+- Extensão `flask-ms-entra-auth` 1.x como único motor OAuth/OIDC;
 - Sessão Redis com SID assinado, payload server-side, TTL e rotação após login;
-- Descarte de cookie obsoleto após assinatura inválida, expiração ou payload corrompido;
+- Persistência condicional com `NX`/`XX`, impedindo a recriação de SID removido por requisição concorrente;
+- Descarte de cookie obsoleto após assinatura inválida, expiração ou payload corrompido, inclusive sem refresh por requisição;
 - `RedisAuthStorage` com TTL e consumo atômico;
 - Vínculo local demonstrativo por hook;
 - Microsoft Graph `/me` com `$select`, timeouts, retries limitados e DTO;

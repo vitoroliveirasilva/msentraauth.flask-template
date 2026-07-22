@@ -100,16 +100,12 @@ class RedisSessionInterface(SessionInterface):
                     self._client.delete(key)
                 except Exception:
                     app.logger.error("server-side session deletion failed")
-                response.delete_cookie(
-                    cookie_name,
-                    domain=self.get_cookie_domain(app),
-                    path=self.get_cookie_path(app),
-                    secure=self.get_cookie_secure(app),
-                    httponly=self.get_cookie_httponly(app),
-                    samesite=self.get_cookie_samesite(app),
-                )
+                self._delete_cookie(app, response, cookie_name)
             return
+
         if not self.should_set_cookie(app, session):
+            if session.discard_cookie:
+                self._delete_cookie(app, response, cookie_name)
             return
 
         payload = self.serializer.dumps(dict(session)).encode("utf-8")
@@ -117,13 +113,21 @@ class RedisSessionInterface(SessionInterface):
             raise SessionBackendError("server-side session payload is too large")
         ttl = int(app.permanent_session_lifetime.total_seconds())
         try:
-            result = self._client.set(key, payload, ex=ttl)
+            result = self._client.set(
+                key,
+                payload,
+                ex=ttl,
+                nx=session.new,
+                xx=not session.new,
+            )
         except Exception as exc:
             app.logger.error("server-side session save failed")
             raise SessionBackendError("server-side session save failed") from exc
-        if result is False:
+        if not result:
             raise SessionBackendError("server-side session save failed")
 
+        session.new = False
+        session.discard_cookie = False
         response.set_cookie(
             cookie_name,
             self._sign_sid(app, session.sid),
@@ -149,6 +153,16 @@ class RedisSessionInterface(SessionInterface):
         session.sid = self._new_sid()
         session.new = True
         session.modified = True
+
+    def _delete_cookie(self, app: Flask, response: Response, cookie_name: str) -> None:
+        response.delete_cookie(
+            cookie_name,
+            domain=self.get_cookie_domain(app),
+            path=self.get_cookie_path(app),
+            secure=self.get_cookie_secure(app),
+            httponly=self.get_cookie_httponly(app),
+            samesite=self.get_cookie_samesite(app),
+        )
 
     def _fresh_session(self, app: Flask, *, discard_cookie: bool = False) -> RedisSession:
         initial: dict[str, object] = {}

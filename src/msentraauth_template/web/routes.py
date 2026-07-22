@@ -32,8 +32,15 @@ def create_web_blueprint() -> Blueprint:
         if not isinstance(client, RedisClient):
             return jsonify(status="unavailable"), 503
         try:
-            client.ping()
-        except Exception:
+            available = bool(client.ping())
+        except Exception as exc:
+            current_app.logger.warning(
+                "redis readiness check failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            return jsonify(status="unavailable"), 503
+        if not available:
+            current_app.logger.warning("redis readiness check returned an unavailable result")
             return jsonify(status="unavailable"), 503
         return jsonify(status="ready"), 200
 

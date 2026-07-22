@@ -129,6 +129,13 @@ def test_health_and_graph_error_handler(
     client = app.test_client()
     assert client.get("/health/live").json == {"status": "ok"}
     assert client.get("/health/ready").json == {"status": "ready"}
+
+    redis_double.ping_result = False
+    unavailable = client.get("/health/ready")
+    assert unavailable.status_code == 503
+    assert unavailable.json == {"status": "unavailable"}
+
+    redis_double.ping_result = True
     redis_double.fail = "ping"
     unavailable = client.get("/health/ready")
     assert unavailable.status_code == 503

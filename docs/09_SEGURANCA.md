@@ -2,7 +2,8 @@
 
 - Sessão Redis com SID assinado, payload server-side e limite de 64 KiB;
 - Rotação do SID depois da autenticação para reduzir session fixation;
-- Descarte de cookies inválidos, expirados ou associados a payload corrompido;
+- Persistência condicional `NX`/`XX` para impedir que requisições concorrentes recriem SIDs removidos;
+- Descarte de cookies inválidos, expirados ou associados a payload corrompido, inclusive sem refresh por requisição;
 - Storage atômico Redis para transações de uso único;
 - CSRF em formulários e logout por POST;
 - CSP, HSTS em HTTPS, anti-frame, nosniff, COOP, CORP e Permissions Policy;

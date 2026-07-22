@@ -6,7 +6,11 @@ import pytest
 from flask import Flask, Response, request
 
 from conftest import RedisDouble
-from msentraauth_template.session_backend import RedisSession, RedisSessionInterface
+from msentraauth_template.session_backend import (
+    RedisSession,
+    RedisSessionInterface,
+    SessionBackendError,
+)
 
 
 def make_app(
@@ -46,6 +50,8 @@ def test_new_save_load_and_no_refresh(redis_double: RedisDouble) -> None:
     opened.permanent = True
     response = Response()
     interface.save_session(app, opened, response)
+    assert opened.new is False
+    assert opened.discard_cookie is False
     signed = cookie_value(response)
 
     with app.test_request_context("/", headers={"Cookie": f"session={signed}"}):
@@ -109,6 +115,23 @@ def test_load_failure_and_invalid_signature_create_fresh_session(
     assert "Max-Age=0" in response.headers["Set-Cookie"]
 
 
+def test_stale_cookie_is_deleted_without_session_refresh(redis_double: RedisDouble) -> None:
+    app, interface = make_app(redis_double)
+    app.config["SESSION_PERMANENT"] = True
+    sid = interface._new_sid()
+    signed = interface._sign_sid(app, sid)
+
+    with app.test_request_context("/", headers={"Cookie": f"session={signed}"}):
+        fresh = interface.open_session(app, request)
+    assert fresh.permanent is True
+    assert fresh.discard_cookie is True
+
+    response = Response()
+    interface.save_session(app, fresh, response)
+    assert "Max-Age=0" in response.headers["Set-Cookie"]
+    assert redis_double.get(f"msentra-template:session:{fresh.sid}") is None
+
+
 def test_empty_modified_session_deletes_backend_and_cookie(
     redis_double: RedisDouble,
 ) -> None:
@@ -151,8 +174,6 @@ def test_invalid_sid_shape_is_rejected_even_with_valid_signature(
 def test_prefix_payload_limits_and_backend_save_failures(
     redis_double: RedisDouble,
 ) -> None:
-    from msentraauth_template.session_backend import SessionBackendError
-
     with pytest.raises(ValueError, match="key_prefix"):
         RedisSessionInterface(redis_double, key_prefix="invalid")
 
@@ -181,9 +202,29 @@ def test_prefix_payload_limits_and_backend_save_failures(
         interface.save_session(app, failing, Response())
 
 
-def test_delete_and_regeneration_failure_paths(redis_double: RedisDouble) -> None:
-    from msentraauth_template.session_backend import SessionBackendError
+def test_rotation_prevents_stale_request_from_resurrecting_old_sid(
+    redis_double: RedisDouble,
+) -> None:
+    app, interface = make_app(redis_double)
+    active = RedisSession({"value": "current"}, sid=interface._new_sid(), new=True)
+    active.modified = True
+    interface.save_session(app, active, Response())
+    old_sid = active.sid
 
+    stale = RedisSession({"value": "stale"}, sid=old_sid, new=False)
+    stale.modified = True
+    interface.regenerate(app, active)
+
+    with pytest.raises(SessionBackendError, match="save failed"):
+        interface.save_session(app, stale, Response())
+    assert redis_double.get(f"msentra-template:session:{old_sid}") is None
+
+    interface.save_session(app, active, Response())
+    assert active.new is False
+    assert redis_double.get(f"msentra-template:session:{active.sid}") is not None
+
+
+def test_delete_and_regeneration_failure_paths(redis_double: RedisDouble) -> None:
     app, interface = make_app(redis_double)
     empty = RedisSession({"value": "x"}, sid=interface._new_sid(), new=False)
     empty.clear()

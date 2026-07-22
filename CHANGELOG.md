@@ -1,5 +1,14 @@
 # Changelog
 
+## Não lançado
+
+### Corrigido
+
+- Gravações de sessão agora usam as condições Redis `NX` e `XX`, impedindo que uma requisição concorrente ressuscite um SID removido durante a rotação;
+- Cookies de sessão inválidos ou obsoletos são descartados mesmo quando `SESSION_REFRESH_EACH_REQUEST=false`;
+- Falhas condicionais ou retornos falsos do Redis passam a interromper a persistência em vez de serem tratados como sucesso;
+- O readiness retorna indisponível quando `PING` produz uma resposta falsa, não apenas quando lança exceção.
+
 ## 1.0.0
 
 ### Adicionado
