@@ -26,15 +26,18 @@ jobs:
   publish:
     name: Build, publish and smoke test
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Resolve and validate version
+      - name: Resolve and validate versioned source
         id: version
         env:
+          EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           MANUAL_VERSION: ${{ inputs.version }}
         run: |
@@ -62,14 +65,104 @@ jobs:
             exit 1
           fi
 
+          source_tag="${RELEASE_TAG:-v$version}"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" \
+            && "$GITHUB_REF" != "refs/heads/prod" \
+            && "$GITHUB_REF" != "refs/tags/$source_tag" ]]; then
+            echo "Publicação manual só pode partir da branch prod ou da tag $source_tag." >&2
+            exit 1
+          fi
+
+          git fetch --force --tags origin prod
+          tag_commit="$(git rev-list -n 1 "$source_tag" 2>/dev/null || true)"
+          head_commit="$(git rev-parse HEAD)"
+
+          if [[ -z "$tag_commit" ]]; then
+            echo "A tag versionada $source_tag não existe." >&2
+            exit 1
+          fi
+          if [[ "$tag_commit" != "$head_commit" ]]; then
+            echo "O ref selecionado não aponta para o commit da tag $source_tag." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$tag_commit" "origin/prod"; then
+            echo "A tag $source_tag não pertence ao histórico da branch prod." >&2
+            exit 1
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "source-tag=$source_tag" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+
+      - name: Build smoke-test candidate
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: msentraauth-flask-template:release-candidate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test candidate image
+        run: |
+          set -euo pipefail
+
+          network="msentra-smoke-${GITHUB_RUN_ID}"
+          redis_container="msentra-redis-${GITHUB_RUN_ID}"
+          app_container="msentra-app-${GITHUB_RUN_ID}"
+
+          cleanup() {
+            docker rm -f "$app_container" "$redis_container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker network create "$network"
+          docker run --detach --name "$redis_container" --network "$network" redis:8-alpine
+
+          docker run --detach \
+            --name "$app_container" \
+            --network "$network" \
+            --publish 18000:8000 \
+            --read-only \
+            --tmpfs /tmp:size=64m,noexec,nosuid \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --env APP_ENV=development \
+            --env APP_SECRET_KEY=container-smoke-session-secret-with-at-least-32-characters \
+            --env APP_BASE_URL=http://localhost:18000 \
+            --env APP_TRUSTED_HOSTS=localhost,127.0.0.1 \
+            --env APP_LOG_FORMAT=json \
+            --env MS_ENTRA_CLIENT_ID=container-smoke-client-id \
+            --env MS_ENTRA_CLIENT_SECRET=container-smoke-client-secret-with-at-least-24-characters \
+            --env MS_ENTRA_TENANT_ID=container-smoke.example.com \
+            --env MS_ENTRA_REDIRECT_URI=http://localhost:18000/auth/callback \
+            --env MS_ENTRA_SCOPES=User.Read \
+            --env REDIS_URL=redis://$redis_container:6379/0 \
+            --env REDIS_TLS_REQUIRED=false \
+            --env SESSION_COOKIE_SECURE=false \
+            --env WTF_CSRF_ENABLED=false \
+            msentraauth-flask-template:release-candidate
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:18000/health/live >/dev/null \
+              && curl --fail --silent --show-error http://127.0.0.1:18000/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs "$app_container"
+          exit 1
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
@@ -94,6 +187,8 @@ jobs:
             org.opencontainers.image.title=MS Entra Auth Flask Template
             org.opencontainers.image.description=Template Flask de referência com Microsoft Entra ID, Redis e Microsoft Graph
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=MIT
 
       - name: Build and publish image
@@ -112,68 +207,25 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Smoke test published image
+      - name: Verify published digest
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          network="msentra-smoke-${GITHUB_RUN_ID}"
-          redis_container="msentra-redis-${GITHUB_RUN_ID}"
-          app_container="msentra-app-${GITHUB_RUN_ID}"
-
-          cleanup() {
-            docker rm -f "$app_container" "$redis_container" >/dev/null 2>&1 || true
-            docker network rm "$network" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-
-          docker pull "${IMAGE_NAME}:${VERSION}"
-          docker network create "$network"
-          docker run --detach --name "$redis_container" --network "$network" redis:8-alpine
-
-          docker run --detach \
-            --name "$app_container" \
-            --network "$network" \
-            --publish 18000:8000 \
-            --env APP_ENV=development \
-            --env APP_SECRET_KEY=container-smoke-session-secret-with-at-least-32-characters \
-            --env APP_BASE_URL=http://localhost:18000 \
-            --env APP_TRUSTED_HOSTS=localhost,127.0.0.1 \
-            --env APP_LOG_FORMAT=json \
-            --env MS_ENTRA_CLIENT_ID=container-smoke-client-id \
-            --env MS_ENTRA_CLIENT_SECRET=container-smoke-client-secret-with-at-least-24-characters \
-            --env MS_ENTRA_TENANT_ID=container-smoke.example.com \
-            --env MS_ENTRA_REDIRECT_URI=http://localhost:18000/auth/callback \
-            --env MS_ENTRA_SCOPES=User.Read \
-            --env REDIS_URL=redis://$redis_container:6379/0 \
-            --env REDIS_TLS_REQUIRED=false \
-            --env SESSION_COOKIE_SECURE=false \
-            --env WTF_CSRF_ENABLED=false \
-            "${IMAGE_NAME}:${VERSION}"
-
-          for attempt in {1..30}; do
-            if curl --fail --silent --show-error http://127.0.0.1:18000/health/live >/dev/null \
-              && curl --fail --silent --show-error http://127.0.0.1:18000/health/ready >/dev/null; then
-              exit 0
-            fi
-            sleep 2
-          done
-
-          docker logs "$app_container"
-          exit 1
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: docker buildx imagetools inspect "${IMAGE_NAME}@${DIGEST}" >/dev/null
 
       - name: Publish summary
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          SOURCE_TAG: ${{ steps.version.outputs.source-tag }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           {
             echo "## Imagem publicada"
             echo
             echo "- Imagem: \`${IMAGE_NAME}:${VERSION}\`"
+            echo "- Fonte: \`${SOURCE_TAG}\` em \`${GITHUB_SHA}\`"
             echo "- Digest: \`${DIGEST}\`"
             echo "- Plataformas: \`linux/amd64\`, \`linux/arm64\`"
             echo "- SBOM e proveniência: incluídos"
-            echo "- Smoke test com Redis: aprovado"
+            echo "- Smoke test do candidato: aprovado"
+            echo "- Digest publicado: verificado"
           } >> "$GITHUB_STEP_SUMMARY"

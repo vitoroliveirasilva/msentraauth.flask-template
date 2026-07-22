@@ -1,5 +1,38 @@
 # Changelog
 
+## Não lançado
+
+### Corrigido
+
+- Gravações de sessão usam condições Redis `NX` e `XX`, impedindo que uma requisição concorrente ressuscite um SID removido durante a rotação;
+- Cookies com assinatura inválida ou payload corrompido são descartados mesmo quando `SESSION_REFRESH_EACH_REQUEST=false`;
+- Falhas transitórias ou retornos inválidos de leitura no Redis preservam o cookie existente, bloqueiam somente rotas dependentes de sessão e retornam `503` com possibilidade de recuperação automática;
+- Referências assinadas sem chave Redis não apagam o cookie, evitando que uma resposta concorrente com SID antigo remova o cookie recém-rotacionado;
+- Rotas estáticas, liveness e readiness deixam de carregar ou persistir sessão, reduzindo latência e carga desnecessária no Redis;
+- Falhas tardias de gravação ou exclusão substituem respostas de sucesso por `503` sanitizado, removem headers incompatíveis, preservam o cookie e impedem confirmação enganosa de login ou logout;
+- Falhas de serialização e payloads acima do limite substituem a resposta por erro `500` sanitizado sem expor o conteúdo original;
+- Visitas anônimas sem estado deixam de criar chaves Redis e cookies de sessão desnecessários;
+- Leituras da sessão passam a emitir `Vary: Cookie`, evitando cache compartilhado incorreto de respostas personalizadas;
+- Falhas condicionais ou retornos falsos do Redis interrompem a persistência em vez de serem tratados como sucesso;
+- O readiness valida `PING` e um ciclo efêmero de gravação e consumo atômico, detectando Redis acessível porém sem as permissões exigidas;
+- Produção rejeita explicitamente Redis sem TLS, modo de teste e CSRF desabilitado, inclusive quando `AppSettings` é construído diretamente;
+- Timeouts não finitos, como `NaN` e infinito, são rejeitados durante a configuração;
+- Retentativas do Microsoft Graph permanecem limitadas e erros inesperados do transporte deixam de ser mascarados como indisponibilidade externa;
+- Logs textuais passam a manter contexto estruturado em linha única sem anexar mensagens sensíveis de exceções;
+- O registro local demonstrativo possui limite de crescimento e descarte dos usuários autenticados há mais tempo;
+- O vínculo local só é gravado depois que a rotação segura do SID é concluída;
+- Parâmetros numéricos do Gunicorn são validados com limites seguros e mensagens de erro claras;
+- Aliases de callback decodificam o caminho e rejeitam sintaxe dinâmica, excesso de tamanho ou formas ambíguas antes de registrar uma rota Flask;
+- `APP_BASE_URL`, redirect URIs e `GRAPH_BASE_URL` rejeitam formas ambíguas, controles e queries incompatíveis; callbacks respeitam o limite e as restrições do Microsoft Entra;
+- A documentação deixa de apresentar `/auth/logged-out` incorretamente como redirect URI do App Registration;
+- A publicação exige tag pertencente ao histórico de `prod`, testa a imagem candidata antes do push e verifica o digest publicado;
+- A CI valida o Compose, confirma o usuário não-root e executa smoke test real da imagem com Redis;
+- Testes de distribuição deixam de depender da versão `1.0.0` codificada manualmente;
+- A validação local em PowerShell passa a interromper no primeiro comando nativo com falha e ambos os scripts podem ser chamados fora da raiz do repositório;
+- Respostas `405 Method Not Allowed` preservam o header `Allow` gerado pelo Werkzeug;
+- A detecção de placeholders deixa de rejeitar valores legítimos que apenas contêm palavras de exemplo no meio do conteúdo;
+- O registro direto de aliases de callback rejeita todos os caracteres de controle, independentemente da validação de settings.
+
 ## 1.0.0
 
 ### Adicionado

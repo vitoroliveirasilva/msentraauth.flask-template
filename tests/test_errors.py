@@ -49,6 +49,11 @@ def test_sanitized_http_error_pages(
     method = client.post("/")
     assert method.status_code == 405
     assert "Método não permitido" in method.text
+    assert {value.strip() for value in method.headers["Allow"].split(",")} == {
+        "GET",
+        "HEAD",
+        "OPTIONS",
+    }
 
 
 def test_untrusted_host_returns_plain_sanitized_bad_request(

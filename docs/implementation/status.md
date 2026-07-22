@@ -3,16 +3,33 @@
 ## Implementado
 
 - Application factory em estrutura `src`;
-- Rxtensão `flask-ms-entra-auth` 1.x como único motor OAuth/OIDC;
+- Extensão `flask-ms-entra-auth` 1.x como único motor OAuth/OIDC;
 - Sessão Redis com SID assinado, payload server-side, TTL e rotação após login;
-- Descarte de cookie obsoleto após assinatura inválida, expiração ou payload corrompido;
+- Persistência condicional com `NX`/`XX`, impedindo a recriação de SID removido por requisição concorrente;
+- Descarte de cookie após assinatura inválida ou payload corrompido, com preservação de referências assinadas sem chave para evitar corrida com rotação;
+- Preservação de sessão e resposta `503` durante falhas de leitura, gravação ou exclusão no Redis;
+- Substituição sanitizada da resposta quando a sessão não pode ser serializada ou excede o limite;
+- Ausência de escrita Redis e cookie para sessões anônimas vazias;
+- `Vary: Cookie` em respostas que consultam a sessão;
 - `RedisAuthStorage` com TTL e consumo atômico;
-- Vínculo local demonstrativo por hook;
-- Microsoft Graph `/me` com `$select`, timeouts, retries limitados e DTO;
+- Vínculo local demonstrativo, thread-safe, limitado por capacidade e posterior à rotação bem-sucedida do SID;
+- Microsoft Graph `/me` com `$select`, timeouts, retries estritamente limitados, DTO e separação entre falha de rede e erro interno;
+- Configuração fail-fast também para instâncias de `AppSettings` injetadas diretamente;
+- Produção exige Redis TLS, CSRF ativo e modo de teste desabilitado;
+- Endereço-base sem query ou backslash e redirect URI limitada e validada conforme o contrato single-tenant do Microsoft Entra;
+- Callback legado restrito a caminho estático, não-raiz e sem colisão;
+- Base do Microsoft Graph HTTPS e sem query string pré-configurada;
 - Interface Jinja, CSRF, CSP, trusted hosts e headers de segurança;
 - Access log do Gunicorn sem query string do callback;
-- Request ID, logs sanitizados e health checks;
-- CI, testes, artefatos, Gunicorn, Docker e Compose;
+- Request ID e logs JSON/texto sanitizados com campos permitidos;
+- Static assets e health checks sem carregamento ou persistência de sessão, com liveness independente e readiness por `PING` mais round-trip atômico no Redis;
+- CI com Redis real, inspeção de artefatos e smoke test da imagem não-root;
+- Publicação GHCR restrita a tag no histórico de `prod`, com smoke test pré-push e verificação do digest;
+- Gunicorn, Docker e Compose com validações operacionais;
+- Scripts locais de validação independentes do diretório corrente e com interrupção confiável na primeira falha;
+- Erros HTTP sanitizados preservando headers semânticos obrigatórios, incluindo `Allow` em respostas 405;
+- Detecção precisa de placeholders, sem bloquear identificadores ou credenciais legítimos por correspondência parcial;
+- Alias de callback com validação autônoma de caracteres de controle e formas inseguras;
 - Documentação operacional e troubleshooting.
 
 ## Limites

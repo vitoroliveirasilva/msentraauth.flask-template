@@ -6,11 +6,15 @@ Confirme acesso ao PyPI e instale `flask-ms-entra-auth>=1.0,<2`. Para desenvolvi
 
 ## `SettingsError`
 
-Revise placeholders, tamanho dos secrets, HTTPS de produção, origem do redirect, host confiável, porta, `User.Read`, booleanos e URI Redis.
+Revise placeholders, tamanho dos secrets, HTTPS de produção, `APP_BASE_URL` sem query ou backslash, origem e formato do redirect, limite de 256 caracteres, host confiável, porta, `User.Read`, booleanos, timeouts finitos, `GRAPH_BASE_URL` sem query, `TESTING=false`, CSRF ativo e URI Redis com TLS em produção.
 
 ## `/health/ready` retorna 503
 
-Confirme `REDIS_URL`, DNS, porta, TLS, autenticação, CA, firewall e permissões do Redis. O endpoint não testa Microsoft Graph.
+Confirme `REDIS_URL`, DNS, porta, TLS, autenticação, CA, firewall e permissões de `PING`, gravação e Lua/EVAL no Redis. O endpoint executa um round-trip efêmero e não testa Microsoft Graph.
+
+## Aplicação retorna 503 de sessão
+
+Falhas de leitura, gravação ou exclusão no Redis bloqueiam temporariamente a operação e enviam `Retry-After: 5`. O cookie não é removido e respostas de sucesso ou redirecionamento são substituídas por `503`, evitando confirmar uma alteração de sessão que não foi persistida. Corrija a conectividade e repita a requisição.
 
 ## Callback ausente ou consumido
 
@@ -26,7 +30,7 @@ Use host permitido, redirect exatamente registrado e `APP_BASE_URL` coerente com
 
 ## Cookie desaparece após uma falha
 
-O comportamento é intencional quando assinatura, payload ou referência server-side é inválida. A aplicação remove o cookie obsoleto e exige uma nova sessão.
+A remoção é intencional quando a assinatura é inválida ou o payload está corrompido. Uma referência ainda assinada cuja chave Redis não existe é tratada como sessão anônima sem apagar o cookie na resposta vazia, evitando corrida com a rotação de SID. Indisponibilidade transitória do Redis também preserva o cookie.
 
 ## Produção inicia, mas URLs usam HTTP
 

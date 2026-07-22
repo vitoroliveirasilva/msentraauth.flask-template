@@ -8,7 +8,15 @@ from flask_ms_entra_auth import StorageError
 @runtime_checkable
 class RedisClient(Protocol):
     def get(self, name: str) -> bytes | None: ...
-    def set(self, name: str, value: bytes, ex: int | None = None) -> object: ...
+    def set(
+        self,
+        name: str,
+        value: bytes,
+        ex: int | None = None,
+        *,
+        nx: bool = False,
+        xx: bool = False,
+    ) -> object: ...
     def delete(self, *names: str) -> int: ...
     def eval(self, script: str, numkeys: int, *keys_and_args: str) -> object: ...
     def ping(self) -> object: ...
@@ -53,7 +61,7 @@ class RedisAuthStorage:
             result = self._client.set(key, value, ex=ttl)
         except Exception as exc:
             raise StorageError("redis storage save failed") from exc
-        if result is False:
+        if not result:
             raise StorageError("redis storage save failed")
 
     def delete(self, key: str) -> None:

@@ -17,17 +17,17 @@ Desenvolvimento:
 
 ```text
 http://localhost:5000/auth/callback
-http://localhost:5000/auth/logged-out
 ```
 
 Produção:
 
 ```text
 https://seu-dominio/auth/callback
-https://seu-dominio/auth/logged-out
 ```
 
-A URI enviada deve corresponder ao registro (não use wildcard ou domínio não controlado).
+A URI enviada deve corresponder ao registro, ter no máximo 256 caracteres e não usar wildcard, domínio internacionalizado, caracteres de controle ou os caracteres especiais rejeitados pelo Microsoft Entra. Como o projeto é single-tenant, uma query string fixa é aceita quando também estiver cadastrada exatamente no App Registration.
+
+A rota `/logged-out` é apenas a confirmação do logout local da aplicação. Ela não deve ser cadastrada como redirect URI de autenticação e não encerra outras sessões Microsoft. Uma Front-channel logout URL, caso adotada futuramente, é uma configuração separada.
 
 ### App Registration existente com outro callback
 
@@ -37,7 +37,7 @@ Quando o App Registration não puder ser alterado e já usar outro caminho na me
 MS_ENTRA_REDIRECT_URI=http://localhost:5000/getAToken
 ```
 
-O template registra esse caminho como alias direto da função de callback da extensão. Não há redirecionamento intermediário, e os parâmetros `code` e `state` continuam sendo validados pela extensão. O caminho não pode ser a raiz da aplicação nem colidir com outra rota `GET`.
+O template decodifica e registra esse caminho como alias direto da função de callback da extensão. Não há redirecionamento intermediário, e os parâmetros `code` e `state` continuam sendo validados pela extensão. O caminho não pode ser a raiz da aplicação nem colidir com outra rota `GET`.
 
 ## Credencial
 

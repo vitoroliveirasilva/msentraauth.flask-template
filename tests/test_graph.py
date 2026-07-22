@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 import requests
+from requests.adapters import HTTPAdapter
 
 from conftest import GraphResponse, GraphTransportDouble
 from msentraauth_template.graph.client import (
@@ -47,7 +48,7 @@ def test_from_settings_uses_injected_transport(settings: object) -> None:
     assert graph.get_profile("token").id == "graph-id"
 
 
-def test_from_settings_creates_requests_session(
+def test_from_settings_creates_bounded_requests_session(
     settings: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class MountableTransport(GraphTransportDouble):
@@ -62,7 +63,12 @@ def test_from_settings_creates_requests_session(
     monkeypatch.setattr("msentraauth_template.graph.client.requests.Session", lambda: transport)
     graph = GraphClient.from_settings(settings)  # type: ignore[arg-type]
     assert graph.get_profile("token").id == "graph-id"
-    assert transport.mounts[0][0] == "https://"
+    prefix, mounted = transport.mounts[0]
+    assert prefix == "https://"
+    assert isinstance(mounted, HTTPAdapter)
+    assert mounted.max_retries.total == 2
+    assert mounted.max_retries.backoff_max == 2.0
+    assert mounted.max_retries.respect_retry_after_header is False
 
 
 @pytest.mark.parametrize("token", ["", "   ", None])
@@ -88,16 +94,16 @@ def test_translates_http_status(status: int, error_type: type[GraphError]) -> No
         client(transport).get_profile("token")
 
 
-def test_translates_transport_errors() -> None:
+def test_translates_only_expected_transport_errors() -> None:
     transport = GraphTransportDouble()
     transport.error = requests.Timeout("network-secret")
     with pytest.raises(GraphUnavailable) as raised:
         client(transport).get_profile("token")
     assert "network-secret" not in str(raised.value)
-    transport.error = RuntimeError("raw-secret")
-    with pytest.raises(GraphUnavailable) as raised:
+
+    transport.error = RuntimeError("programming-error")
+    with pytest.raises(RuntimeError, match="programming-error"):
         client(transport).get_profile("token")
-    assert "raw-secret" not in str(raised.value)
 
 
 def test_rejects_invalid_json_and_payloads() -> None:

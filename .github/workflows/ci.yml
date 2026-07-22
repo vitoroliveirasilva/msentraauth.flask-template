@@ -148,17 +148,80 @@ jobs:
           .package-venv/bin/python -m pip install dist/*.whl
           .package-venv/bin/python -m pip check
           .package-venv/bin/python - <<'PY'
-          import msentraauth_template
           from importlib.metadata import version
+          from pathlib import Path
+          import tomllib
+
+          import msentraauth_template
+
+          expected = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"][
+              "version"
+          ]
           assert callable(msentraauth_template.create_app)
-          assert version("msentraauth-flask-template") == "1.0.0"
+          assert version("msentraauth-flask-template") == expected
           PY
 
   docker:
-    name: Docker build
+    name: Docker build and smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Validate Compose
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
       - name: Build image
         run: docker build --tag msentraauth-flask-template:ci .
+      - name: Verify non-root runtime
+        run: test "$(docker run --rm --entrypoint id msentraauth-flask-template:ci -u)" = "10001"
+      - name: Smoke test image with Redis
+        run: |
+          set -euo pipefail
+
+          network="msentra-ci-${GITHUB_RUN_ID}"
+          redis_container="msentra-redis-${GITHUB_RUN_ID}"
+          app_container="msentra-app-${GITHUB_RUN_ID}"
+
+          cleanup() {
+            docker rm -f "$app_container" "$redis_container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker network create "$network"
+          docker run --detach --name "$redis_container" --network "$network" redis:8-alpine
+          docker run --detach \
+            --name "$app_container" \
+            --network "$network" \
+            --publish 18000:8000 \
+            --read-only \
+            --tmpfs /tmp:size=64m,noexec,nosuid \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --env APP_ENV=development \
+            --env APP_SECRET_KEY=ci-container-session-secret-with-at-least-32-characters \
+            --env APP_BASE_URL=http://localhost:18000 \
+            --env APP_TRUSTED_HOSTS=localhost,127.0.0.1 \
+            --env APP_LOG_FORMAT=json \
+            --env MS_ENTRA_CLIENT_ID=ci-container-client-id \
+            --env MS_ENTRA_CLIENT_SECRET=ci-container-client-secret-with-at-least-24-characters \
+            --env MS_ENTRA_TENANT_ID=ci-container.example.com \
+            --env MS_ENTRA_REDIRECT_URI=http://localhost:18000/auth/callback \
+            --env MS_ENTRA_SCOPES=User.Read \
+            --env REDIS_URL=redis://$redis_container:6379/0 \
+            --env REDIS_TLS_REQUIRED=false \
+            --env SESSION_COOKIE_SECURE=false \
+            --env WTF_CSRF_ENABLED=false \
+            msentraauth-flask-template:ci
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:18000/health/live >/dev/null \
+              && curl --fail --silent --show-error http://127.0.0.1:18000/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs "$app_container"
+          exit 1

@@ -31,6 +31,8 @@ No PowerShell:
 
 O gate inclui lint, formatação, tipagem, compilação, testes com cobertura integral, Bandit, auditoria de dependências, build, Twine, inspeção de artefatos e `pip check`.
 
+Os scripts podem ser chamados de qualquer diretório. Ambos resolvem a raiz do repositório e encerram imediatamente quando um comando do gate retorna código diferente de zero.
+
 ## Fronteiras
 
 - Não duplique OAuth, callback, state, token cache ou identidade no template;

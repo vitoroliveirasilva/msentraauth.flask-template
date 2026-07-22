@@ -4,7 +4,7 @@
 
 1. Disponibilizar `flask-ms-entra-auth` 1.x no índice configurado;
 2. Configurar App Registration, secrets e redirect URI;
-3. Provisionar Redis privado, autenticado, persistente e preferencialmente com TLS;
+3. Provisionar Redis privado, autenticado, persistente e com TLS em produção;
 4. Construir a imagem do template ou utilizar a imagem versionada do GHCR;
 5. Executar atrás de proxy HTTPS conhecido;
 6. Configurar corretamente `PROXY_X_*`;
@@ -16,11 +16,15 @@
 
 O Dockerfile usa build multi-stage, Python slim, Gunicorn e UID/GID não-root. O access log utiliza somente o caminho da requisição, sem query string, para não registrar parâmetros do callback OAuth.
 
-O Compose adiciona Redis persistente, health checks, reinício, filesystem read-only para a aplicação, `no-new-privileges`, remoção de capabilities da aplicação e rotação básica de logs.
+O Compose adiciona Redis persistente, health checks, reinício, filesystem read-only para a aplicação, `no-new-privileges`, remoção de capabilities da aplicação e rotação básica de logs. A CI valida o Compose, confirma o UID `10001` e executa a imagem final contra Redis real.
+
+As variáveis numéricas do Gunicorn são validadas na inicialização. Valores não inteiros, portas inválidas, contagens negativas ou limites excessivos interrompem o processo com uma mensagem que identifica a variável incorreta.
 
 ## GitHub Container Registry
 
-A publicação de uma Release dispara o workflow `Publish container`. A versão da tag deve corresponder ao campo `project.version` do `pyproject.toml`.
+A publicação de uma Release dispara o workflow `Publish container`. A versão da tag deve corresponder ao campo `project.version` do `pyproject.toml`, o checkout precisa apontar exatamente para o commit dessa tag e a tag deve pertencer ao histórico da branch `prod`.
+
+A execução manual aceita somente a branch `prod` ou a própria tag versionada. O workflow compara o `HEAD` com o commit da tag e confirma a ancestralidade em `prod` antes de construir ou autenticar, evitando imagens sem correspondência com uma versão imutável.
 
 A imagem é publicada em:
 
@@ -38,7 +42,7 @@ latest
 sha-<commit>
 ```
 
-A imagem inclui metadados OCI, SBOM e proveniência de build. O workflow publica variantes para `linux/amd64` e `linux/arm64` e executa um smoke test contra Redis real antes de concluir.
+A imagem inclui metadados OCI de versão e revisão, SBOM e proveniência de build. Antes do push, o workflow constrói uma candidata `linux/amd64` e executa smoke test contra Redis real. Somente depois publica as variantes `linux/amd64` e `linux/arm64` e verifica o digest resultante.
 
 Download:
 
@@ -55,8 +59,8 @@ A primeira publicação cria o Package com visibilidade privada por padrão. Ap�
 O fluxo recomendado é:
 
 1. Aprovar a CI da branch `prod`;
-2. Criar uma Release com tag `v<versão>`;
-3. Aguardar a publicação e o smoke test da imagem;
+2. Criar uma Release com tag `v<versão>` apontando para o commit aprovado;
+3. Aguardar a validação da fonte, o smoke test pré-publicação, o push multi-plataforma e a verificação do digest;
 4. Tornar o Package público na primeira publicação;
 5. Validar o pull pelo digest exibido no resumo do workflow.
 
