@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from flask import Flask, session
 from flask_ms_entra_auth import AtomicAuthStorage, SecurityReport
 
@@ -119,6 +120,7 @@ def test_health_and_graph_error_handler(
     settings: object,
     redis_double: RedisDouble,
     msal_runtime: tuple[FakeMsalClient, object],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, factory = msal_runtime
     transport = GraphTransportDouble()
@@ -155,21 +157,28 @@ def test_health_and_graph_error_handler(
     unavailable = client.get("/health/ready")
     assert unavailable.status_code == 503
     assert unavailable.json == {"status": "unavailable"}
+    assert list(redis_double.scan_iter(match="msentra-template:readiness:*"))
 
     redis_double.fail = None
+    redis_double.return_invalid = False
+    for key in tuple(redis_double.scan_iter(match="msentra-template:readiness:*")):
+        redis_double.delete(key.decode())
+    assert list(redis_double.scan_iter(match="msentra-template:readiness:*")) == []
+
     redis_double.return_invalid = True
     unavailable = client.get("/health/ready")
     assert unavailable.status_code == 503
     assert unavailable.json == {"status": "unavailable"}
     redis_double.return_invalid = False
 
-    redis_double.forced_get = b"unexpected-readiness-value"
+    def invalid_atomic_take(script: str, numkeys: int, *keys_and_args: str) -> object:
+        del script, numkeys, keys_and_args
+        return b"unexpected-readiness-value"
+
+    monkeypatch.setattr(redis_double, "eval", invalid_atomic_take)
     unavailable = client.get("/health/ready")
     assert unavailable.status_code == 503
     assert unavailable.json == {"status": "unavailable"}
-    redis_double.forced_get = None
-    for key in tuple(redis_double.scan_iter(match="msentra-template:readiness:*")):
-        redis_double.delete(key.decode())
     assert list(redis_double.scan_iter(match="msentra-template:readiness:*")) == []
 
 
