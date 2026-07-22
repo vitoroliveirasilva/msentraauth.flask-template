@@ -10,7 +10,32 @@ from urllib.parse import SplitResult, unquote, urlsplit
 
 from redis import Redis
 
-_PLACEHOLDERS: Final = ("substitua", "changeme", "replace", "gere-uma-chave")
+_PLACEHOLDER_VALUES: Final = frozenset(
+    {"change-me", "changeme", "replace", "replace-me", "substitua"}
+)
+_PLACEHOLDER_PREFIXES: Final = (
+    "change-me ",
+    "change-me-",
+    "change-me_",
+    "changeme ",
+    "changeme-",
+    "changeme_",
+    "gere uma chave",
+    "gere-uma-chave",
+    "gere_uma_chave",
+    "replace me ",
+    "replace me-",
+    "replace me_",
+    "replace-me ",
+    "replace-me-",
+    "replace-me_",
+    "replace_me ",
+    "replace_me-",
+    "replace_me_",
+    "substitua ",
+    "substitua-",
+    "substitua_",
+)
 _ENVIRONMENTS: Final = frozenset({"development", "testing", "production"})
 _LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 _LOG_FORMATS: Final = frozenset({"json", "text"})
@@ -297,9 +322,14 @@ def _required_text_value(value: object, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise SettingsError(f"{name} is required")
     normalized = value.strip()
-    if any(marker in normalized.lower() for marker in _PLACEHOLDERS):
+    if _contains_placeholder(normalized):
         raise SettingsError(f"{name} contains a placeholder")
     return normalized
+
+
+def _contains_placeholder(value: str) -> bool:
+    normalized = value.casefold()
+    return normalized in _PLACEHOLDER_VALUES or normalized.startswith(_PLACEHOLDER_PREFIXES)
 
 
 def _validate_secret_value(value: object, name: str, *, minimum: int) -> str:
@@ -356,7 +386,7 @@ def _text(values: Mapping[str, str], name: str, default: str | None = None) -> s
     if raw is None or not raw.strip():
         raise SettingsError(f"{name} is required")
     value = raw.strip()
-    if any(marker in value.lower() for marker in _PLACEHOLDERS):
+    if _contains_placeholder(value):
         raise SettingsError(f"{name} contains a placeholder")
     return value
 

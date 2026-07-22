@@ -197,6 +197,19 @@ def test_rejects_documented_placeholders(name: str, value: str) -> None:
         AppSettings.from_env(env)
 
 
+def test_allows_placeholder_words_embedded_in_legitimate_values() -> None:
+    env = valid_env()
+    env["APP_SECRET_KEY"] = "safe-replace-token-" + ("x" * 32)
+    env["MS_ENTRA_CLIENT_SECRET"] = "secret-with-replace-inside-" + ("x" * 24)
+    env["MS_ENTRA_TENANT_ID"] = "replace-industries.example.test"
+
+    settings = AppSettings.from_env(env)
+
+    assert settings.secret_key == env["APP_SECRET_KEY"]
+    assert settings.client_secret == env["MS_ENTRA_CLIENT_SECRET"]
+    assert settings.tenant_id == env["MS_ENTRA_TENANT_ID"]
+
+
 def test_requires_values_and_non_empty_csv() -> None:
     env = valid_env()
     env.pop("MS_ENTRA_CLIENT_ID")

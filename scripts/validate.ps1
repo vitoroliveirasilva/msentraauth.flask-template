@@ -1,22 +1,47 @@
 $ErrorActionPreference = "Stop"
 
-python -m pip install -e ".[dev]"
-ruff check .
-ruff format --check .
-mypy src tests
-python -m compileall -q src tests
-pytest
-bandit -c pyproject.toml -r src
-pip-audit .
-python -m pip check
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
 
-Remove-Item -Recurse -Force dist, build -ErrorAction SilentlyContinue
-python -m build
-python -m twine check dist/*
-$env:DIST_DIR = "dist"
+        [Parameter()]
+        [string[]]$ArgumentList = @()
+    )
+
+    & $FilePath @ArgumentList
+    if ($LASTEXITCODE -ne 0) {
+        $renderedArguments = $ArgumentList -join " "
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $renderedArguments"
+    }
+}
+
+$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+Push-Location $repositoryRoot
+
 try {
-    pytest tests/test_distribution.py --no-cov
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "pip", "install", "-e", ".[dev]")
+    Invoke-NativeCommand -FilePath "ruff" -ArgumentList @("check", ".")
+    Invoke-NativeCommand -FilePath "ruff" -ArgumentList @("format", "--check", ".")
+    Invoke-NativeCommand -FilePath "mypy" -ArgumentList @("src", "tests")
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "compileall", "-q", "src", "tests")
+    Invoke-NativeCommand -FilePath "pytest"
+    Invoke-NativeCommand -FilePath "bandit" -ArgumentList @("-c", "pyproject.toml", "-r", "src")
+    Invoke-NativeCommand -FilePath "pip-audit" -ArgumentList @(".")
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "pip", "check")
+
+    Remove-Item -Recurse -Force dist, build -ErrorAction SilentlyContinue
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "build")
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "twine", "check", "dist/*")
+
+    $env:DIST_DIR = "dist"
+    try {
+        Invoke-NativeCommand -FilePath "pytest" -ArgumentList @("tests/test_distribution.py", "--no-cov")
+    }
+    finally {
+        Remove-Item Env:DIST_DIR -ErrorAction SilentlyContinue
+    }
 }
 finally {
-    Remove-Item Env:DIST_DIR -ErrorAction SilentlyContinue
+    Pop-Location
 }

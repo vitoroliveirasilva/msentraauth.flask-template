@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from runpy import run_path
 
 import pytest
@@ -169,3 +170,16 @@ def test_gunicorn_accepts_bounded_integer_overrides(monkeypatch: pytest.MonkeyPa
     assert config["workers"] == 3
     assert config["threads"] == 8
     assert config["max_requests"] == 0
+
+
+def test_validation_scripts_fail_fast_and_resolve_repository_root() -> None:
+    powershell = Path("scripts/validate.ps1").read_text(encoding="utf-8")
+    shell = Path("scripts/validate.sh").read_text(encoding="utf-8")
+
+    assert "$LASTEXITCODE -ne 0" in powershell
+    assert "$PSScriptRoot" in powershell
+    assert "Push-Location" in powershell
+    assert "Pop-Location" in powershell
+    assert "set -eu" in shell
+    assert 'dirname -- "$0"' in shell
+    assert 'cd -- "$repository_root"' in shell

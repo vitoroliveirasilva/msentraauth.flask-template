@@ -33,8 +33,12 @@ def register_error_handlers(app: Flask) -> None:
         return _render("Página não encontrada", "O endereço informado não existe.", 404)
 
     @app.errorhandler(MethodNotAllowed)
-    def method_not_allowed(_: MethodNotAllowed) -> tuple[str, int]:
-        return _render("Método não permitido", "Use o método HTTP esperado por esta rota.", 405)
+    def method_not_allowed(error: MethodNotAllowed) -> Response:
+        response = app.make_response(
+            _render("Método não permitido", "Use o método HTTP esperado por esta rota.", 405)
+        )
+        response.headers["Allow"] = error.get_response().headers.get("Allow", "")
+        return response
 
     @app.errorhandler(RequestEntityTooLarge)
     def request_too_large(_: RequestEntityTooLarge) -> tuple[str, int]:

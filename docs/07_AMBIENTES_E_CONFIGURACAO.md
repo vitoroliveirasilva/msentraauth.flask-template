@@ -28,3 +28,5 @@ Loopback HTTP, cookie não-secure e Redis local são permitidos. CSRF pode ser d
 
 - Configuração inválida gera `SettingsError` antes de servir requisições;
 - Parâmetros numéricos do Gunicorn também falham cedo quando estão fora dos limites operacionais aceitos.
+
+A detecção de placeholders reconhece os valores-modelo e prefixos explícitos usados na documentação, sem rejeitar credenciais ou identificadores legítimos apenas porque contêm palavras como `replace` no meio do valor.

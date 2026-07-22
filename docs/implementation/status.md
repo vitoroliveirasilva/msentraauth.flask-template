@@ -26,6 +26,10 @@
 - CI com Redis real, inspeção de artefatos e smoke test da imagem não-root;
 - Publicação GHCR restrita a tag no histórico de `prod`, com smoke test pré-push e verificação do digest;
 - Gunicorn, Docker e Compose com validações operacionais;
+- Scripts locais de validação independentes do diretório corrente e com interrupção confiável na primeira falha;
+- Erros HTTP sanitizados preservando headers semânticos obrigatórios, incluindo `Allow` em respostas 405;
+- Detecção precisa de placeholders, sem bloquear identificadores ou credenciais legítimos por correspondência parcial;
+- Alias de callback com validação autônoma de caracteres de controle e formas inseguras;
 - Documentação operacional e troubleshooting.
 
 ## Limites

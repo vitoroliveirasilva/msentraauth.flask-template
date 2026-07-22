@@ -236,4 +236,3 @@ def test_session_save_failure_replaces_success_response_with_503(
     assert response.headers["Cache-Control"] == "no-store, max-age=0"
     assert "must-not-leak" not in response.text
     assert "Set-Cookie" not in response.headers
-

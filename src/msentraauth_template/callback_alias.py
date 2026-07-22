@@ -26,7 +26,8 @@ def register_callback_alias(app: Flask, redirect_uri: str) -> None:
         not callback_path.startswith("/")
         or callback_path.startswith("//")
         or len(callback_path) > _MAX_CALLBACK_PATH_LENGTH
-        or any(character in callback_path for character in ("<", ">", "\\", "\x00"))
+        or any(character in callback_path for character in ("<", ">", "\\"))
+        or any(ord(character) < 32 or ord(character) == 127 for character in callback_path)
     ):
         raise CallbackAliasError("MS_ENTRA_REDIRECT_URI must contain a static safe callback path")
 
