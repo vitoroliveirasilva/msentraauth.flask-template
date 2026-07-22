@@ -15,14 +15,15 @@
 - Vínculo local demonstrativo, thread-safe, limitado por capacidade e posterior à rotação bem-sucedida do SID;
 - Microsoft Graph `/me` com `$select`, timeouts, retries estritamente limitados, DTO e separação entre falha de rede e erro interno;
 - Configuração fail-fast também para instâncias de `AppSettings` injetadas diretamente;
-- Produção exige Redis TLS, CSRF ativo e modo de teste desabilitado;
+- Produção exige Redis TLS, validação de certificado e hostname, CSRF ativo e modo de teste desabilitado;
+- `REDIS_URL` impede que parâmetros de query substituam opções binárias, timeouts, health check e verificações TLS definidas pela aplicação;
 - Endereço-base sem query ou backslash e redirect URI limitada e validada conforme o contrato single-tenant do Microsoft Entra;
 - Callback legado restrito a caminho estático, não-raiz e sem colisão;
 - Base do Microsoft Graph HTTPS e sem query string pré-configurada;
 - Interface Jinja, CSRF, CSP, trusted hosts e headers de segurança;
 - Access log do Gunicorn sem query string do callback;
 - Request ID e logs JSON/texto sanitizados com campos permitidos;
-- Static assets e health checks sem carregamento ou persistência de sessão, com liveness independente e readiness por `PING` mais round-trip atômico no Redis;
+- Static assets e health checks sem carregamento ou persistência de sessão, com liveness independente, readiness por `PING` mais round-trip atômico no Redis e tentativa de limpeza da chave efêmera mesmo em falhas;
 - CI com Redis real, inspeção de artefatos e smoke test da imagem não-root;
 - Publicação GHCR restrita a tag no histórico de `prod`, com smoke test pré-push e verificação do digest;
 - Gunicorn, Docker e Compose com validações operacionais;

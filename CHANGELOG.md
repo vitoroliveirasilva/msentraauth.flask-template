@@ -31,7 +31,9 @@
 - A validação local em PowerShell passa a interromper no primeiro comando nativo com falha e ambos os scripts podem ser chamados fora da raiz do repositório;
 - Respostas `405 Method Not Allowed` preservam o header `Allow` gerado pelo Werkzeug;
 - A detecção de placeholders deixa de rejeitar valores legítimos que apenas contêm palavras de exemplo no meio do conteúdo;
-- O registro direto de aliases de callback rejeita todos os caracteres de controle, independentemente da validação de settings.
+- O registro direto de aliases de callback rejeita todos os caracteres de controle, independentemente da validação de settings;
+- Parâmetros de query em `REDIS_URL` não podem sobrescrever o modo binário, os timeouts, o health check ou a verificação TLS controlados pela aplicação;
+- O readiness remove sua chave efêmera em todos os resultados, inclusive quando o consumo atômico retorna um valor inesperado.
 
 ## 1.0.0
 

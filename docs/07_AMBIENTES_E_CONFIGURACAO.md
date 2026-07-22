@@ -17,6 +17,7 @@ Loopback HTTP, cookie não-secure e Redis local são permitidos. CSRF pode ser d
 - Client secret com pelo menos 24 caracteres;
 - `User.Read` em `MS_ENTRA_SCOPES`;
 - `REDIS_TLS_REQUIRED=true` e URI `rediss://`;
+- A query de `REDIS_URL` não pode redefinir `decode_responses`, timeouts, health check ou verificações TLS controladas pela aplicação;
 - `TESTING=false` e `WTF_CSRF_ENABLED=true`;
 - Timeouts positivos e finitos, sem `NaN` ou infinito;
 - Portas válidas e URLs sem fragmentos ou credenciais onde não permitidas;

@@ -46,13 +46,14 @@ def create_web_blueprint() -> Blueprint:
                 current_app.logger.warning("redis readiness round-trip returned an invalid result")
                 return jsonify(status="unavailable"), 503
         except Exception as exc:
-            with suppress(Exception):
-                client.delete(probe_key)
             current_app.logger.warning(
                 "redis readiness check failed",
                 extra={"error_type": type(exc).__name__},
             )
             return jsonify(status="unavailable"), 503
+        finally:
+            with suppress(Exception):
+                client.delete(probe_key)
         return jsonify(status="ready"), 200
 
     return blueprint
