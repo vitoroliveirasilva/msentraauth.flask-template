@@ -22,7 +22,7 @@ As variáveis numéricas do Gunicorn são validadas na inicialização. Valores 
 
 ## GitHub Container Registry
 
-A publicação de uma Release dispara o workflow `Publish container`. A versão da tag deve corresponder ao campo `project.version` do `pyproject.toml`, o checkout precisa apontar exatamente para o commit dessa tag e a tag deve pertencer ao histórico da branch `prod`.
+A publicação de uma Release dispara o workflow `Publish container`. A versão da tag deve corresponder ao campo `project.version` do `pyproject.toml`, o checkout precisa apontar exatamente para o commit dessa tag e a tag deve pertencer ao histórico da branch `prod`. O workflow também constrói e valida `wheel` e `sdist`, anexando-os à GitHub Release após a publicação e a verificação da imagem.
 
 A execução manual aceita somente a branch `prod` ou a própria tag versionada. O workflow compara o `HEAD` com o commit da tag e confirma a ancestralidade em `prod` antes de construir ou autenticar, evitando imagens sem correspondência com uma versão imutável.
 
@@ -32,12 +32,12 @@ A imagem é publicada em:
 ghcr.io/vitoroliveirasilva/msentraauth.flask-template
 ```
 
-Para a versão `1.0.0`, as tags produzidas são:
+Para uma versão `X.Y.Z`, as tags produzidas são:
 
 ```text
-1.0.0
-1.0
-1
+X.Y.Z
+X.Y
+X
 latest
 sha-<commit>
 ```
@@ -47,12 +47,16 @@ A imagem inclui metadados OCI de versão e revisão, SBOM e proveniência de bui
 Download:
 
 ```bash
-docker pull ghcr.io/vitoroliveirasilva/msentraauth.flask-template:1.0.0
+docker pull ghcr.io/vitoroliveirasilva/msentraauth.flask-template:<versão>
 ```
 
 O contêiner não inclui Redis nem credenciais. A execução exige as mesmas variáveis documentadas em `.env.example` e um Redis acessível pela URL configurada em `REDIS_URL`.
 
-A primeira publicação cria o Package com visibilidade privada por padrão. Após validar a imagem, altere uma única vez em **Package settings → Change visibility → Public**. Essa mudança é irreversível no GitHub.
+A primeira publicação cria o Package de contêiner com visibilidade privada por padrão. Após validar a imagem, altere uma única vez em **Package settings → Change visibility → Public**. Essa mudança é irreversível no GitHub.
+
+## Pacote Python
+
+O template não é publicado no PyPI. A versão do pacote acompanha `project.version` no `pyproject.toml`; a CI valida instalação, metadados e dependências em ambiente limpo. Durante uma GitHub Release, o workflow constrói `wheel` e `sdist`, executa `twine check` e anexa os dois artefatos à própria Release. A imagem versionada no GHCR continua sendo o artefato principal de distribuição.
 
 ## Publicação e recuperação
 
@@ -60,9 +64,10 @@ O fluxo recomendado é:
 
 1. Aprovar a CI da branch `prod`;
 2. Criar uma Release com tag `v<versão>` apontando para o commit aprovado;
-3. Aguardar a validação da fonte, o smoke test pré-publicação, o push multi-plataforma e a verificação do digest;
-4. Tornar o Package público na primeira publicação;
-5. Validar o pull pelo digest exibido no resumo do workflow.
+3. Aguardar o build e a validação do pacote Python, o smoke test pré-publicação, o push multi-plataforma e a verificação do digest;
+4. Confirmar que `wheel` e `sdist` foram anexados à Release;
+5. Tornar o Package de contêiner público na primeira publicação;
+6. Validar o pull pelo digest exibido no resumo do workflow.
 
 Em rollback, use uma tag de versão anterior ou, para máxima imutabilidade, o digest OCI registrado pelo workflow. A tag `latest` representa apenas a Release estável mais recente e não deve substituir pinagem de versão em produção.
 
