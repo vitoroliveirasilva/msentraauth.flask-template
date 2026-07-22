@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from logging import Logger
 from threading import RLock
@@ -9,6 +10,8 @@ from flask import current_app, session
 from flask_ms_entra_auth import Identity, MicrosoftEntraAuth
 
 from ..session_backend import RedisSessionInterface
+
+_DEFAULT_MAX_USERS = 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,13 +30,16 @@ class LocalUser:
 
 
 class LocalUserRegistry:
-    # Registro de demonstração seguro para threads; não é um banco de dados de produção
+    # Registro demonstrativo thread-safe e limitado (não substitui persistência)
 
-    __slots__ = ("_lock", "_users")
+    __slots__ = ("_lock", "_max_users", "_users")
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_users: int = _DEFAULT_MAX_USERS) -> None:
+        if isinstance(max_users, bool) or not isinstance(max_users, int) or max_users <= 0:
+            raise ValueError("max_users must be a positive integer")
         self._lock = RLock()
-        self._users: dict[tuple[str, str], LocalUser] = {}
+        self._max_users = max_users
+        self._users: OrderedDict[tuple[str, str], LocalUser] = OrderedDict()
 
     def bind(self, identity: Identity) -> LocalUser:
         user = LocalUser(
@@ -45,6 +51,9 @@ class LocalUserRegistry:
         )
         with self._lock:
             self._users[user.stable_id] = user
+            self._users.move_to_end(user.stable_id)
+            while len(self._users) > self._max_users:
+                self._users.popitem(last=False)
         return user
 
     def get(self, tenant_id: str, object_id: str) -> LocalUser | None:
@@ -61,15 +70,15 @@ def register_auth_hooks(
     users: LocalUserRegistry,
     logger: Logger,
 ) -> None:
-    # Registra o comportamento da aplicação sem duplicar o código do protocolo
+    # Registra comportamento da aplicação sem duplicar o protocolo OAuth/OIDC
 
     @extension.on_authenticated
     def bind_authenticated_identity(identity: Identity) -> None:
-        users.bind(identity)
         interface = current_app.session_interface
         if not isinstance(interface, RedisSessionInterface):
             raise RuntimeError("the configured session interface cannot rotate session IDs")
         interface.regenerate(current_app, session)
+        users.bind(identity)
 
     @extension.on_logout
     def log_local_logout(identity: Identity | None) -> None:

@@ -96,8 +96,6 @@ class GraphClient:
             )
         except requests.RequestException as exc:
             raise GraphUnavailable("Microsoft Graph is unavailable") from exc
-        except Exception as exc:
-            raise GraphUnavailable("Microsoft Graph request failed") from exc
 
         if response.status_code in {401, 403}:
             raise GraphUnauthorized("Microsoft Graph rejected the delegated credential")
@@ -124,7 +122,8 @@ def _build_transport() -> requests.Session:
         allowed_methods=frozenset({"GET"}),
         status_forcelist=(429, 500, 502, 503, 504),
         backoff_factor=0.25,
-        respect_retry_after_header=True,
+        backoff_max=2.0,
+        respect_retry_after_header=False,
         raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retries, pool_connections=10, pool_maxsize=10)

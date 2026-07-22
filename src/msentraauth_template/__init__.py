@@ -13,7 +13,7 @@ from .graph.client import GraphClient, HttpTransport
 from .graph.routes import create_graph_blueprint
 from .observability import configure_observability
 from .security import configure_security
-from .session_backend import RedisSessionInterface
+from .session_backend import RedisSessionInterface, register_session_backend_guard
 from .settings import AppSettings
 from .storage import RedisAuthStorage, RedisClient
 from .web.errors import register_error_handlers
@@ -32,6 +32,7 @@ def create_app(
     graph_transport: HttpTransport | None = None,
 ) -> Flask:
     # Cria uma aplicação totalmente configurada sem estado de usuário global
+
     resolved = settings or AppSettings.from_env(environ)
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_mapping(resolved.flask_config())
@@ -55,6 +56,7 @@ def create_app(
         )
 
     app.session_interface = RedisSessionInterface(client)
+    register_session_backend_guard(app)
     csrf.init_app(app)
 
     storage = RedisAuthStorage(client)

@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from ipaddress import ip_address
+from math import isfinite
 from typing import Final
 from urllib.parse import SplitResult, urlsplit
 
@@ -15,7 +17,7 @@ _LOG_FORMATS: Final = frozenset({"json", "text"})
 
 
 class SettingsError(ValueError):
-    """É gerado quando a configuração do modelo está ausente ou insegura"""
+    """É gerado quando a configuração do template está ausente ou insegura"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +67,7 @@ class AppSettings:
         values = os.environ if environ is None else environ
         environment = _environment(_text(values, "APP_ENV", default="production"))
         testing = _boolean(values, "TESTING", default=environment == "testing")
+        csrf_enabled = _boolean(values, "WTF_CSRF_ENABLED", default=not testing)
         secret_key = _secret(values, "APP_SECRET_KEY", minimum=32)
         base_url = _web_url(_text(values, "APP_BASE_URL"), "APP_BASE_URL")
         trusted_hosts = _csv(values, "APP_TRUSTED_HOSTS", default="localhost,127.0.0.1")
@@ -103,9 +106,12 @@ class AppSettings:
             trusted_hosts=trusted_hosts,
             cookie_secure=cookie_secure,
             cookie_samesite=cookie_samesite,
+            redis_tls_required=redis_tls_required,
+            testing=testing,
+            csrf_enabled=csrf_enabled,
         )
 
-        return cls(
+        settings = cls(
             environment=environment,
             secret_key=secret_key,
             base_url=base_url.rstrip("/"),
@@ -146,10 +152,92 @@ class AppSettings:
                 x_prefix=_bounded_non_negative_int(values, "PROXY_X_PREFIX", 0, maximum=5),
             ),
             testing=testing,
-            csrf_enabled=_boolean(values, "WTF_CSRF_ENABLED", default=not testing),
+            csrf_enabled=csrf_enabled,
+        )
+        settings.validate()
+        return settings
+
+    def validate(self) -> None:
+        """Revalida invariantes ao receber uma instância construída diretamente."""
+
+        environment = _environment(_required_text_value(self.environment, "APP_ENV"))
+        _require_canonical(self.environment, environment, "APP_ENV")
+        secret_key = _validate_secret_value(self.secret_key, "APP_SECRET_KEY", minimum=32)
+        _require_canonical(self.secret_key, secret_key, "APP_SECRET_KEY")
+        base_url = _web_url(_required_text_value(self.base_url, "APP_BASE_URL"), "APP_BASE_URL")
+        base_url = base_url.rstrip("/")
+        _require_canonical(self.base_url, base_url, "APP_BASE_URL")
+        trusted_hosts = _validate_string_values(self.trusted_hosts, "APP_TRUSTED_HOSTS")
+        _require_canonical(self.trusted_hosts, trusted_hosts, "APP_TRUSTED_HOSTS")
+        log_level = _log_level(_required_text_value(self.log_level, "APP_LOG_LEVEL"))
+        _require_canonical(self.log_level, log_level, "APP_LOG_LEVEL")
+        log_format = _choice(
+            _required_text_value(self.log_format, "APP_LOG_FORMAT"),
+            "APP_LOG_FORMAT",
+            _LOG_FORMATS,
+        )
+        _require_canonical(self.log_format, log_format, "APP_LOG_FORMAT")
+        client_id = _required_text_value(self.client_id, "MS_ENTRA_CLIENT_ID")
+        _require_canonical(self.client_id, client_id, "MS_ENTRA_CLIENT_ID")
+        client_secret = _validate_secret_value(
+            self.client_secret, "MS_ENTRA_CLIENT_SECRET", minimum=24
+        )
+        _require_canonical(self.client_secret, client_secret, "MS_ENTRA_CLIENT_SECRET")
+        tenant_id = _required_text_value(self.tenant_id, "MS_ENTRA_TENANT_ID")
+        _require_canonical(self.tenant_id, tenant_id, "MS_ENTRA_TENANT_ID")
+        redirect_uri = _web_url(
+            _required_text_value(self.redirect_uri, "MS_ENTRA_REDIRECT_URI"),
+            "MS_ENTRA_REDIRECT_URI",
+        )
+        _require_canonical(self.redirect_uri, redirect_uri, "MS_ENTRA_REDIRECT_URI")
+        scopes = _validate_string_values(self.scopes, "MS_ENTRA_SCOPES")
+        _require_canonical(self.scopes, scopes, "MS_ENTRA_SCOPES")
+        if "User.Read" not in scopes:
+            raise SettingsError("MS_ENTRA_SCOPES must include User.Read for the profile route")
+
+        _validate_boolean(self.redis_tls_required, "REDIS_TLS_REQUIRED")
+        redis_url = _redis_url(
+            _required_text_value(self.redis_url, "REDIS_URL"),
+            tls_required=self.redis_tls_required,
+        )
+        _require_canonical(self.redis_url, redis_url, "REDIS_URL")
+        _validate_positive_float(self.redis_socket_connect_timeout, "REDIS_CONNECT_TIMEOUT_SECONDS")
+        _validate_positive_float(self.redis_socket_timeout, "REDIS_READ_TIMEOUT_SECONDS")
+        _validate_non_negative_int(
+            self.redis_health_check_interval,
+            "REDIS_HEALTH_CHECK_INTERVAL_SECONDS",
+        )
+        _validate_positive_int(self.session_lifetime_seconds, "SESSION_LIFETIME_SECONDS")
+        _validate_boolean(self.session_refresh_each_request, "SESSION_REFRESH_EACH_REQUEST")
+        _validate_boolean(self.cookie_secure, "SESSION_COOKIE_SECURE")
+        cookie_samesite = _samesite(
+            _required_text_value(self.cookie_samesite, "SESSION_COOKIE_SAMESITE")
+        )
+        _require_canonical(self.cookie_samesite, cookie_samesite, "SESSION_COOKIE_SAMESITE")
+        graph_base_url = _https_url(
+            _required_text_value(self.graph_base_url, "GRAPH_BASE_URL"), "GRAPH_BASE_URL"
+        ).rstrip("/")
+        _require_canonical(self.graph_base_url, graph_base_url, "GRAPH_BASE_URL")
+        _validate_positive_float(self.graph_connect_timeout, "GRAPH_CONNECT_TIMEOUT_SECONDS")
+        _validate_positive_float(self.graph_read_timeout, "GRAPH_READ_TIMEOUT_SECONDS")
+        _validate_proxy_hops(self.proxy_hops)
+        _validate_boolean(self.testing, "TESTING")
+        _validate_boolean(self.csrf_enabled, "WTF_CSRF_ENABLED")
+
+        _validate_environment_security(
+            environment=environment,
+            base_url=base_url,
+            redirect_uri=redirect_uri,
+            trusted_hosts=trusted_hosts,
+            cookie_secure=self.cookie_secure,
+            cookie_samesite=cookie_samesite,
+            redis_tls_required=self.redis_tls_required,
+            testing=self.testing,
+            csrf_enabled=self.csrf_enabled,
         )
 
     def create_redis_client(self) -> Redis:
+        self.validate()
         return Redis.from_url(
             self.redis_url,
             decode_responses=False,
@@ -159,6 +247,7 @@ class AppSettings:
         )
 
     def flask_config(self) -> dict[str, object]:
+        self.validate()
         production = self.environment == "production"
         return {
             "ENV": self.environment,
@@ -199,6 +288,69 @@ class AppSettings:
             "SEND_FILE_MAX_AGE_DEFAULT": 31536000 if production else 0,
             "TEMPLATES_AUTO_RELOAD": not production,
         }
+
+
+def _require_canonical(actual: object, canonical: object, name: str) -> None:
+    if actual != canonical:
+        raise SettingsError(f"{name} must use its normalized form")
+
+
+def _required_text_value(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SettingsError(f"{name} is required")
+    normalized = value.strip()
+    if any(marker in normalized.lower() for marker in _PLACEHOLDERS):
+        raise SettingsError(f"{name} contains a placeholder")
+    return normalized
+
+
+def _validate_secret_value(value: object, name: str, *, minimum: int) -> str:
+    normalized = _required_text_value(value, name)
+    if len(normalized) < minimum:
+        raise SettingsError(f"{name} must contain at least {minimum} characters")
+    return normalized
+
+
+def _validate_string_values(values: object, name: str) -> tuple[str, ...]:
+    if not isinstance(values, (tuple, list)):
+        raise SettingsError(f"{name} must contain at least one value")
+    normalized = tuple(dict.fromkeys(_required_text_value(value, name) for value in values))
+    if not normalized:
+        raise SettingsError(f"{name} must contain at least one value")
+    return normalized
+
+
+def _validate_boolean(value: object, name: str) -> None:
+    if not isinstance(value, bool):
+        raise SettingsError(f"{name} must be a boolean")
+
+
+def _validate_non_negative_int(value: object, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SettingsError(f"{name} must be an integer")
+    if value < 0:
+        raise SettingsError(f"{name} cannot be negative")
+
+
+def _validate_positive_int(value: object, name: str) -> None:
+    _validate_non_negative_int(value, name)
+    if value == 0:
+        raise SettingsError(f"{name} must be positive")
+
+
+def _validate_proxy_hops(proxy_hops: object) -> None:
+    if not isinstance(proxy_hops, ProxyHops):
+        raise SettingsError("proxy_hops must be ProxyHops")
+    for name, value in (
+        ("PROXY_X_FOR", proxy_hops.x_for),
+        ("PROXY_X_PROTO", proxy_hops.x_proto),
+        ("PROXY_X_HOST", proxy_hops.x_host),
+        ("PROXY_X_PORT", proxy_hops.x_port),
+        ("PROXY_X_PREFIX", proxy_hops.x_prefix),
+    ):
+        _validate_non_negative_int(value, name)
+        if value > 5:
+            raise SettingsError(f"{name} cannot exceed 5")
 
 
 def _text(values: Mapping[str, str], name: str, default: str | None = None) -> str:
@@ -278,9 +430,18 @@ def _positive_float(values: Mapping[str, str], name: str, default: float) -> flo
         value = float(raw)
     except ValueError as exc:
         raise SettingsError(f"{name} must be numeric") from exc
-    if value <= 0:
-        raise SettingsError(f"{name} must be positive")
+    _validate_positive_float(value, name)
     return value
+
+
+def _validate_positive_float(value: object, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SettingsError(f"{name} must be numeric")
+    normalized = float(value)
+    if not isfinite(normalized):
+        raise SettingsError(f"{name} must be finite")
+    if normalized <= 0:
+        raise SettingsError(f"{name} must be positive")
 
 
 def _environment(value: str) -> str:
@@ -361,6 +522,9 @@ def _validate_environment_security(
     trusted_hosts: tuple[str, ...],
     cookie_secure: bool,
     cookie_samesite: str,
+    redis_tls_required: bool,
+    testing: bool,
+    csrf_enabled: bool,
 ) -> None:
     base = urlsplit(base_url)
     redirect = urlsplit(redirect_uri)
@@ -375,6 +539,12 @@ def _validate_environment_security(
             raise SettingsError("APP_BASE_URL must use HTTPS in production")
         if not cookie_secure:
             raise SettingsError("SESSION_COOKIE_SECURE must be true in production")
+        if not redis_tls_required:
+            raise SettingsError("REDIS_TLS_REQUIRED must be true in production")
+        if testing:
+            raise SettingsError("TESTING must be false in production")
+        if not csrf_enabled:
+            raise SettingsError("WTF_CSRF_ENABLED must be true in production")
 
 
 def _origin(parsed: SplitResult) -> tuple[str, str, int | None]:
@@ -394,7 +564,13 @@ def _trusted_host_matches(hostname: str, pattern: str) -> bool:
 
 
 def _is_loopback(hostname: str | None) -> bool:
-    return hostname in {"localhost", "127.0.0.1", "::1"}
+    normalized = (hostname or "").lower().rstrip(".")
+    if normalized == "localhost":
+        return True
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 __all__ = ["AppSettings", "ProxyHops", "SettingsError"]

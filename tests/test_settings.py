@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any, cast
 
 import pytest
 
@@ -38,8 +39,25 @@ def valid_env() -> dict[str, str]:
     }
 
 
+def production_env() -> dict[str, str]:
+    env = valid_env()
+    env.update(
+        APP_ENV="production",
+        APP_BASE_URL="https://app.example.test",
+        APP_TRUSTED_HOSTS="app.example.test",
+        MS_ENTRA_REDIRECT_URI="https://app.example.test/auth/callback",
+        REDIS_URL="rediss://:secret@redis.example.test:6380/0",
+        REDIS_TLS_REQUIRED="true",
+        SESSION_COOKIE_SECURE="true",
+        TESTING="false",
+        WTF_CSRF_ENABLED="true",
+    )
+    return env
+
+
 def test_loads_and_normalizes_environment() -> None:
     settings = AppSettings.from_env(valid_env())
+    settings.validate()
     assert settings.environment == "development"
     assert settings.trusted_hosts == ("localhost", "127.0.0.1")
     assert settings.log_level == "DEBUG"
@@ -131,6 +149,9 @@ def test_defaults_and_redis_factory(monkeypatch: pytest.MonkeyPatch) -> None:
         ("PROXY_X_FOR", "6", "exceed"),
         ("GRAPH_READ_TIMEOUT_SECONDS", "abc", "numeric"),
         ("GRAPH_READ_TIMEOUT_SECONDS", "0", "positive"),
+        ("GRAPH_READ_TIMEOUT_SECONDS", "nan", "finite"),
+        ("GRAPH_READ_TIMEOUT_SECONDS", "inf", "finite"),
+        ("REDIS_CONNECT_TIMEOUT_SECONDS", "-inf", "finite"),
         ("SESSION_COOKIE_SAMESITE", "wild", "SAMESITE"),
         ("APP_BASE_URL", "relative", "absolute"),
         ("APP_BASE_URL", "https://user:pass@example.test", "safe"),
@@ -179,7 +200,7 @@ def test_requires_values_and_non_empty_csv() -> None:
         AppSettings.from_env(env)
 
 
-def test_production_requires_https_secure_cookie_and_tls_redis() -> None:
+def test_production_requires_https_secure_cookie_tls_csrf_and_non_testing() -> None:
     env = valid_env() | {"APP_ENV": "production"}
     env.pop("REDIS_TLS_REQUIRED")
     with pytest.raises(SettingsError, match="rediss"):
@@ -196,6 +217,22 @@ def test_production_requires_https_secure_cookie_and_tls_redis() -> None:
         SESSION_COOKIE_SECURE="false",
     )
     with pytest.raises(SettingsError, match="must be true"):
+        AppSettings.from_env(env)
+
+    env = production_env()
+    env["REDIS_TLS_REQUIRED"] = "false"
+    env["REDIS_URL"] = "redis://redis.example.test:6379/0"
+    with pytest.raises(SettingsError, match="REDIS_TLS_REQUIRED"):
+        AppSettings.from_env(env)
+
+    env = production_env()
+    env["TESTING"] = "true"
+    with pytest.raises(SettingsError, match="TESTING"):
+        AppSettings.from_env(env)
+
+    env = production_env()
+    env["WTF_CSRF_ENABLED"] = "false"
+    with pytest.raises(SettingsError, match="WTF_CSRF_ENABLED"):
         AppSettings.from_env(env)
 
 
@@ -221,7 +258,7 @@ def test_redirect_origin_trusted_host_and_samesite_are_validated() -> None:
         AppSettings.from_env(env)
 
 
-def test_subdomain_trust_default_ports_and_redis_credentials_are_supported() -> None:
+def test_subdomain_trust_default_ports_redis_credentials_and_loopback_are_supported() -> None:
     env = valid_env()
     env.update(
         APP_BASE_URL="https://app.example.test",
@@ -233,6 +270,82 @@ def test_subdomain_trust_default_ports_and_redis_credentials_are_supported() -> 
     )
     settings = AppSettings.from_env(env)
     assert settings.redis_url.startswith("rediss://service-user:")
+
+    loopback = valid_env()
+    loopback.update(
+        APP_BASE_URL="http://127.0.0.2:5000",
+        APP_TRUSTED_HOSTS="127.0.0.2",
+        MS_ENTRA_REDIRECT_URI="http://127.0.0.2:5000/auth/callback",
+    )
+    assert AppSettings.from_env(loopback).base_url == "http://127.0.0.2:5000"
+
+
+def test_directly_constructed_settings_are_validated(settings: AppSettings) -> None:
+    unsafe_production = replace(
+        settings,
+        environment="production",
+        base_url="https://app.example.test",
+        redirect_uri="https://app.example.test/auth/callback",
+        trusted_hosts=("app.example.test",),
+        cookie_secure=True,
+        testing=False,
+        csrf_enabled=True,
+        redis_url="redis://redis.example.test:6379/0",
+        redis_tls_required=False,
+    )
+    with pytest.raises(SettingsError, match="REDIS_TLS_REQUIRED"):
+        unsafe_production.flask_config()
+
+    non_finite = replace(settings, graph_read_timeout=float("nan"))
+    with pytest.raises(SettingsError, match="finite"):
+        non_finite.flask_config()
+
+    insufficient_scope = replace(settings, scopes=("Mail.Read",))
+    with pytest.raises(SettingsError, match="User.Read"):
+        insufficient_scope.flask_config()
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"environment": "staging"}, "APP_ENV"),
+        ({"secret_key": "short"}, "APP_SECRET_KEY"),
+        ({"trusted_hosts": ()}, "APP_TRUSTED_HOSTS"),
+        ({"trusted_hosts": "localhost"}, "APP_TRUSTED_HOSTS"),
+        ({"trusted_hosts": ("",)}, "APP_TRUSTED_HOSTS"),
+        ({"log_level": "verbose"}, "APP_LOG_LEVEL"),
+        ({"log_level": "info"}, "normalized"),
+        ({"log_format": "xml"}, "APP_LOG_FORMAT"),
+        ({"client_id": 1}, "MS_ENTRA_CLIENT_ID"),
+        ({"client_id": "replace-me"}, "placeholder"),
+        ({"client_secret": "short"}, "MS_ENTRA_CLIENT_SECRET"),
+        ({"tenant_id": ""}, "MS_ENTRA_TENANT_ID"),
+        ({"scopes": []}, "MS_ENTRA_SCOPES"),
+        ({"redis_tls_required": "false"}, "REDIS_TLS_REQUIRED"),
+        ({"redis_health_check_interval": True}, "REDIS_HEALTH_CHECK_INTERVAL_SECONDS"),
+        ({"redis_health_check_interval": "30"}, "REDIS_HEALTH_CHECK_INTERVAL_SECONDS"),
+        ({"redis_health_check_interval": -1}, "REDIS_HEALTH_CHECK_INTERVAL_SECONDS"),
+        ({"session_lifetime_seconds": 0}, "SESSION_LIFETIME_SECONDS"),
+        ({"session_refresh_each_request": "true"}, "SESSION_REFRESH_EACH_REQUEST"),
+        ({"cookie_secure": "false"}, "SESSION_COOKIE_SECURE"),
+        ({"cookie_samesite": "wild"}, "SESSION_COOKIE_SAMESITE"),
+        ({"graph_connect_timeout": "1"}, "GRAPH_CONNECT_TIMEOUT_SECONDS"),
+        ({"graph_connect_timeout": True}, "GRAPH_CONNECT_TIMEOUT_SECONDS"),
+        ({"proxy_hops": object()}, "proxy_hops"),
+        ({"proxy_hops": ProxyHops(x_for=-1)}, "PROXY_X_FOR"),
+        ({"proxy_hops": ProxyHops(x_for=6)}, "PROXY_X_FOR"),
+        ({"testing": "false"}, "TESTING"),
+        ({"csrf_enabled": "true"}, "WTF_CSRF_ENABLED"),
+    ],
+)
+def test_direct_settings_reject_invalid_runtime_values(
+    settings: AppSettings,
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    invalid = replace(settings, **cast(Any, changes))
+    with pytest.raises(SettingsError, match=message):
+        invalid.validate()
 
 
 def test_testing_defaults_and_production_flask_config(settings: AppSettings) -> None:
@@ -250,7 +363,11 @@ def test_testing_defaults_and_production_flask_config(settings: AppSettings) -> 
         base_url="https://app.example.test",
         redirect_uri="https://app.example.test/auth/callback",
         trusted_hosts=("app.example.test",),
+        redis_url="rediss://redis.example.test:6380/0",
+        redis_tls_required=True,
         cookie_secure=True,
+        testing=False,
+        csrf_enabled=True,
     )
     config = production.flask_config()
     assert config["MS_ENTRA_STRICT_SECURITY"] is True

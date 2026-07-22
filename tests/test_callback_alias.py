@@ -54,6 +54,23 @@ def test_rejects_missing_or_root_callback_paths(redirect_uri: str) -> None:
         register_callback_alias(app, redirect_uri)
 
 
+@pytest.mark.parametrize(
+    "redirect_uri",
+    [
+        "callback",
+        "http://localhost:5000//callback",
+        "http://localhost:5000/<path:callback>",
+        r"http://localhost:5000/callback\legacy",
+        "http://localhost:5000/" + ("a" * 2048),
+    ],
+)
+def test_rejects_dynamic_or_unsafe_callback_paths(redirect_uri: str) -> None:
+    app = _app_with_extension_callback()
+
+    with pytest.raises(CallbackAliasError, match="static safe"):
+        register_callback_alias(app, redirect_uri)
+
+
 def test_rejects_alias_when_extension_callback_is_missing() -> None:
     app = Flask(__name__)
 

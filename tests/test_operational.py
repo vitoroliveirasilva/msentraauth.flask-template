@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from runpy import run_path
 
+import pytest
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from conftest import FakeMsalClient, GraphResponse, GraphTransportDouble, RedisDouble
@@ -21,7 +23,10 @@ def test_proxy_hsts_invalid_ready_and_graph_error(
         base_url="https://localhost",
         redirect_uri="https://localhost/auth/callback",
         cookie_secure=True,
-        redis_tls_required=False,
+        redis_url="rediss://redis.example.test:6380/0",
+        redis_tls_required=True,
+        testing=False,
+        csrf_enabled=True,
         proxy_hops=ProxyHops(x_for=1, x_proto=1),
     )
     transport = GraphTransportDouble()
@@ -107,11 +112,60 @@ def test_static_assets_keep_cache_policy(
 
 
 def test_gunicorn_access_log_omits_callback_query_string() -> None:
-    from runpy import run_path
-
     config = run_path("gunicorn.conf.py")
     access_format = config["access_log_format"]
 
+    assert config["bind"] == "0.0.0.0:8000"
+    assert config["workers"] == 2
+    assert config["threads"] == 4
     assert "%(U)s" in access_format
     assert "%(q)s" not in access_format
     assert "%(r)s" not in access_format
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("PORT", "0"),
+        ("PORT", "65536"),
+        ("WEB_CONCURRENCY", "abc"),
+        ("GUNICORN_THREADS", "-1"),
+        ("GUNICORN_TIMEOUT", "3601"),
+        ("GUNICORN_KEEPALIVE", "-1"),
+        ("GUNICORN_MAX_REQUESTS", "10000001"),
+    ],
+)
+def test_gunicorn_rejects_invalid_integer_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+) -> None:
+    for variable in (
+        "PORT",
+        "WEB_CONCURRENCY",
+        "GUNICORN_THREADS",
+        "GUNICORN_TIMEOUT",
+        "GUNICORN_GRACEFUL_TIMEOUT",
+        "GUNICORN_KEEPALIVE",
+        "GUNICORN_MAX_REQUESTS",
+        "GUNICORN_MAX_REQUESTS_JITTER",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(RuntimeError, match=name):
+        run_path("gunicorn.conf.py")
+
+
+def test_gunicorn_accepts_bounded_integer_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PORT", "9000")
+    monkeypatch.setenv("WEB_CONCURRENCY", "3")
+    monkeypatch.setenv("GUNICORN_THREADS", "8")
+    monkeypatch.setenv("GUNICORN_MAX_REQUESTS", "0")
+    monkeypatch.setenv("GUNICORN_MAX_REQUESTS_JITTER", "0")
+
+    config = run_path("gunicorn.conf.py")
+    assert config["bind"] == "0.0.0.0:9000"
+    assert config["workers"] == 3
+    assert config["threads"] == 8
+    assert config["max_requests"] == 0

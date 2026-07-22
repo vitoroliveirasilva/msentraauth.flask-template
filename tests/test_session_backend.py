@@ -47,9 +47,10 @@ def test_new_save_load_and_no_refresh(redis_double: RedisDouble) -> None:
         opened = interface.open_session(app, request)
     assert opened.new is True
     opened["value"] = "stored"
-    opened.permanent = True
+    assert opened.permanent is False
     response = Response()
     interface.save_session(app, opened, response)
+    assert opened.permanent is True
     assert opened.new is False
     assert opened.discard_cookie is False
     signed = cookie_value(response)
@@ -63,6 +64,26 @@ def test_new_save_load_and_no_refresh(redis_double: RedisDouble) -> None:
     untouched = Response()
     interface.save_session(app, restored, untouched)
     assert "Set-Cookie" not in untouched.headers
+
+
+def test_session_reads_mark_cookie_as_accessed(redis_double: RedisDouble) -> None:
+    app, interface = make_app(redis_double)
+
+    by_index = RedisSession({"value": "x"}, sid=interface._new_sid(), new=False)
+    assert by_index.accessed is False
+    assert by_index["value"] == "x"
+    assert by_index.accessed is True
+
+    by_get = RedisSession({"value": "x"}, sid=interface._new_sid(), new=False)
+    assert by_get.get("value") == "x"
+    assert by_get.accessed is True
+
+    by_default = RedisSession(sid=interface._new_sid(), new=True)
+    assert by_default.setdefault("value", "x") == "x"
+    assert by_default.accessed is True
+    response = Response()
+    interface.save_session(app, by_default, response)
+    assert response.headers["Vary"] == "Cookie"
 
 
 def test_missing_expired_corrupt_and_non_mapping_payloads(
@@ -104,11 +125,17 @@ def test_load_failure_and_invalid_signature_create_fresh_session(
     with app.test_request_context("/", headers={"Cookie": f"session={signed}"}):
         failed = interface.open_session(app, request)
     assert failed.new is True
+    assert failed.backend_available is False
+    assert failed.discard_cookie is False
+    unavailable_response = Response()
+    interface.save_session(app, failed, unavailable_response)
+    assert "Set-Cookie" not in unavailable_response.headers
 
     redis_double.fail = None
     with app.test_request_context("/", headers={"Cookie": "session=tampered"}):
         invalid = interface.open_session(app, request)
     assert invalid.new is True
+    assert invalid.backend_available is True
     assert invalid.discard_cookie is True
     response = Response()
     interface.save_session(app, invalid, response)
@@ -123,7 +150,7 @@ def test_stale_cookie_is_deleted_without_session_refresh(redis_double: RedisDoub
 
     with app.test_request_context("/", headers={"Cookie": f"session={signed}"}):
         fresh = interface.open_session(app, request)
-    assert fresh.permanent is True
+    assert fresh.permanent is False
     assert fresh.discard_cookie is True
 
     response = Response()
@@ -149,6 +176,19 @@ def test_empty_unmodified_session_does_nothing(redis_double: RedisDouble) -> Non
     response = Response()
     interface.save_session(app, session, response)
     assert "Set-Cookie" not in response.headers
+    assert redis_double.get(f"msentra-template:session:{session.sid}") is None
+
+
+def test_loaded_permanent_only_session_is_removed(redis_double: RedisDouble) -> None:
+    app, interface = make_app(redis_double)
+    session = RedisSession({"_permanent": True}, sid=interface._new_sid(), new=False)
+    redis_double.set(f"msentra-template:session:{session.sid}", b"obsolete")
+    response = Response()
+
+    interface.save_session(app, session, response)
+
+    assert "Max-Age=0" in response.headers["Set-Cookie"]
+    assert redis_double.get(f"msentra-template:session:{session.sid}") is None
 
 
 def test_rejects_wrong_session_type_and_missing_secret(
@@ -252,3 +292,10 @@ def test_non_permanent_fresh_session(redis_double: RedisDouble) -> None:
     app.config["SESSION_PERMANENT"] = False
     fresh = interface._fresh_session(app)
     assert fresh.permanent is False
+    assert fresh.backend_available is True
+
+    fresh["value"] = "stored"
+    response = Response()
+    interface.save_session(app, fresh, response)
+    assert fresh.permanent is False
+    assert "Set-Cookie" in response.headers

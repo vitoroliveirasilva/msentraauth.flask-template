@@ -87,6 +87,8 @@ def test_full_login_graph_and_logout_flow(
     anonymous = client.get("/")
     assert anonymous.status_code == 200
     assert "Entrar com Microsoft" in anonymous.text
+    assert "Set-Cookie" not in anonymous.headers
+    assert list(redis_double.scan_iter(match="msentra-template:session:*")) == []
     protected = client.get("/profile")
     assert protected.status_code == 302
 
@@ -140,3 +142,39 @@ def test_health_and_graph_error_handler(
     unavailable = client.get("/health/ready")
     assert unavailable.status_code == 503
     assert unavailable.json == {"status": "unavailable"}
+
+
+def test_transient_session_load_failure_preserves_cookie_and_recovers(
+    settings: object,
+    redis_double: RedisDouble,
+    msal_runtime: tuple[FakeMsalClient, object],
+) -> None:
+    _, factory = msal_runtime
+    app = create_app(
+        settings,  # type: ignore[arg-type]
+        redis_client=redis_double,
+        msal_client_factory=factory,  # type: ignore[arg-type]
+        graph_transport=GraphTransportDouble(),
+    )
+    client = app.test_client()
+
+    login = client.get("/auth/login")
+    state = parse_qs(urlsplit(login.headers["Location"]).query)["state"][0]
+    assert (
+        client.get("/auth/callback", query_string={"code": "code", "state": state}).status_code
+        == 302
+    )
+
+    redis_double.fail = "get"
+    unavailable = client.get("/profile")
+    assert unavailable.status_code == 503
+    assert unavailable.headers["Retry-After"] == "5"
+    assert "Sessão temporariamente indisponível" in unavailable.text
+    assert "Set-Cookie" not in unavailable.headers
+    assert client.get("/health/live").status_code == 200
+    assert client.get("/missing").status_code == 404
+
+    redis_double.fail = None
+    recovered = client.get("/profile")
+    assert recovered.status_code == 200
+    assert "Template User" in recovered.text

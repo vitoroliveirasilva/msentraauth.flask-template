@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Flask, Response, g, render_template
+from flask import Flask, Response, current_app, g, render_template
 from werkzeug.exceptions import (
     BadRequest,
     Forbidden,
@@ -9,6 +9,8 @@ from werkzeug.exceptions import (
     RequestEntityTooLarge,
     SecurityError,
 )
+
+from ..session_backend import SessionBackendUnavailable
 
 
 def register_error_handlers(app: Flask) -> None:
@@ -37,6 +39,22 @@ def register_error_handlers(app: Flask) -> None:
     @app.errorhandler(RequestEntityTooLarge)
     def request_too_large(_: RequestEntityTooLarge) -> tuple[str, int]:
         return _render("Requisição muito grande", "O conteúdo excede o limite aceito.", 413)
+
+    @app.errorhandler(SessionBackendUnavailable)
+    def session_backend_unavailable(error: SessionBackendUnavailable) -> Response:
+        current_app.logger.error(
+            "server-side session backend is unavailable",
+            extra={"error_type": type(error).__name__},
+        )
+        response = app.make_response(
+            _render(
+                "Sessão temporariamente indisponível",
+                "A sessão não pôde ser consultada. Tente novamente em instantes.",
+                503,
+            )
+        )
+        response.headers["Retry-After"] = "5"
+        return response
 
     @app.errorhandler(500)
     def internal_error(_: object) -> tuple[str, int]:

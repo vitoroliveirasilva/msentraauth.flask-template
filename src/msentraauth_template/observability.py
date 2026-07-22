@@ -12,6 +12,7 @@ from flask import Flask, Response, g, request
 from .settings import AppSettings
 
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
+_MAX_LOG_MESSAGE_LENGTH = 4096
 _EXTRA_FIELDS = (
     "request_id",
     "method",
@@ -31,15 +32,36 @@ class JsonLogFormatter(logging.Formatter):
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": _safe_message(record),
         }
         for field in _EXTRA_FIELDS:
             value = getattr(record, field, None)
             if value is not None:
                 payload[field] = value
-        if record.exc_info and record.exc_info[0] is not None:
-            payload["exception_type"] = record.exc_info[0].__name__
+        exception_type = _exception_type(record)
+        if exception_type is not None:
+            payload["exception_type"] = exception_type
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+class TextLogFormatter(logging.Formatter):
+    # Gera logs de linha única com os mesmos campos conservadores do JSON
+
+    def format(self, record: logging.LogRecord) -> str:
+        parts = [
+            datetime.now(UTC).isoformat(),
+            record.levelname,
+            record.name,
+            _safe_message(record),
+        ]
+        for field in _EXTRA_FIELDS:
+            value = getattr(record, field, None)
+            if value is not None:
+                parts.append(f"{field}={_text_value(value)}")
+        exception_type = _exception_type(record)
+        if exception_type is not None:
+            parts.append(f"exception_type={exception_type}")
+        return " ".join(parts)
 
 
 def configure_observability(app: Flask, settings: AppSettings) -> None:
@@ -48,9 +70,7 @@ def configure_observability(app: Flask, settings: AppSettings) -> None:
     if settings.log_format == "json":
         formatter = JsonLogFormatter()
     else:
-        formatter = logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s",
-        )
+        formatter = TextLogFormatter()
     for handler in app.logger.handlers:
         handler.setFormatter(formatter)
 
@@ -78,4 +98,25 @@ def configure_observability(app: Flask, settings: AppSettings) -> None:
         return response
 
 
-__all__ = ["JsonLogFormatter", "configure_observability"]
+def _safe_message(record: logging.LogRecord) -> str:
+    try:
+        message = record.getMessage()
+    except Exception:
+        message = "<unformattable log message>"
+    normalized = message.replace("\r", "\\r").replace("\n", "\\n")
+    if len(normalized) <= _MAX_LOG_MESSAGE_LENGTH:
+        return normalized
+    return f"{normalized[:_MAX_LOG_MESSAGE_LENGTH]}…"
+
+
+def _text_value(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _exception_type(record: logging.LogRecord) -> str | None:
+    if record.exc_info and record.exc_info[0] is not None:
+        return record.exc_info[0].__name__
+    return None
+
+
+__all__ = ["JsonLogFormatter", "TextLogFormatter", "configure_observability"]
