@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "msentraauth-flask-template"
-version = "1.0.0"
+version = "1.0.1"
 description = "Aplicação Flask de referência para flask-ms-entra-auth com Redis e Microsoft Graph."
 readme = "README.md"
 requires-python = ">=3.11"
