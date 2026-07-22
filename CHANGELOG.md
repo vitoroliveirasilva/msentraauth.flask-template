@@ -2,6 +2,8 @@
 
 ## Não lançado
 
+## 1.0.1 - 2026-07-22
+
 ### Corrigido
 
 - Gravações de sessão usam condições Redis `NX` e `XX`, impedindo que uma requisição concorrente ressuscite um SID removido durante a rotação;
@@ -33,7 +35,14 @@
 - A detecção de placeholders deixa de rejeitar valores legítimos que apenas contêm palavras de exemplo no meio do conteúdo;
 - O registro direto de aliases de callback rejeita todos os caracteres de controle, independentemente da validação de settings;
 - Parâmetros de query em `REDIS_URL` não podem sobrescrever o modo binário, os timeouts, o health check ou a verificação TLS controlados pela aplicação;
-- O readiness remove sua chave efêmera em todos os resultados, inclusive quando o consumo atômico retorna um valor inesperado.
+- O readiness tenta remover sua chave efêmera em todos os resultados, inclusive quando o consumo atômico retorna um valor inesperado;
+- Os testes de readiness isolam corretamente o cenário em que o Redis recusa a exclusão da chave efêmera.
+
+### Alterado
+
+- A publicação deixa de manter uma versão fixa no formulário manual do workflow;
+- Cada GitHub Release passa a receber `wheel` e `sdist` validados, sem publicar o template no PyPI;
+- A imagem GHCR continua sendo publicada com tags semânticas, SBOM, proveniência, smoke test e verificação de digest.
 
 ## 1.0.0
 

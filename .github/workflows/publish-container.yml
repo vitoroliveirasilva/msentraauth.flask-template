@@ -8,11 +8,10 @@ on:
       version:
         description: Versão semântica existente no pyproject.toml
         required: true
-        default: "1.0.0"
         type: string
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -93,6 +92,19 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "source-tag=$source_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Build and validate Python package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "build>=1.4.4,<1.6" "twine>=6.2,<7"
+          python -m build
+          python -m twine check dist/*
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -212,11 +224,19 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: docker buildx imagetools inspect "${IMAGE_NAME}@${DIGEST}" >/dev/null
 
+      - name: Attach Python package to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_TAG: ${{ steps.version.outputs.source-tag }}
+        run: gh release upload "$SOURCE_TAG" dist/* --clobber
+
       - name: Publish summary
         env:
           VERSION: ${{ steps.version.outputs.version }}
           SOURCE_TAG: ${{ steps.version.outputs.source-tag }}
           DIGEST: ${{ steps.build.outputs.digest }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           {
             echo "## Imagem publicada"
@@ -226,6 +246,11 @@ jobs:
             echo "- Digest: \`${DIGEST}\`"
             echo "- Plataformas: \`linux/amd64\`, \`linux/arm64\`"
             echo "- SBOM e proveniência: incluídos"
+            if [[ "$EVENT_NAME" == "release" ]]; then
+              echo "- Pacote Python: wheel e sdist validados e anexados à Release"
+            else
+              echo "- Pacote Python: wheel e sdist validados"
+            fi
             echo "- Smoke test do candidato: aprovado"
             echo "- Digest publicado: verificado"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -26,6 +26,7 @@
 - Static assets e health checks sem carregamento ou persistência de sessão, com liveness independente, readiness por `PING` mais round-trip atômico no Redis e tentativa de limpeza da chave efêmera mesmo em falhas;
 - CI com Redis real, inspeção de artefatos e smoke test da imagem não-root;
 - Publicação GHCR restrita a tag no histórico de `prod`, com smoke test pré-push e verificação do digest;
+- GitHub Release com `wheel` e `sdist` validados e anexados, sem publicação do template no PyPI;
 - Gunicorn, Docker e Compose com validações operacionais;
 - Scripts locais de validação independentes do diretório corrente e com interrupção confiável na primeira falha;
 - Erros HTTP sanitizados preservando headers semânticos obrigatórios, incluindo `Allow` em respostas 405;
