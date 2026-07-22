@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 from math import isfinite
 from typing import Final
-from urllib.parse import SplitResult, unquote, urlsplit
+from urllib.parse import SplitResult, parse_qsl, unquote, urlsplit
 
 from redis import Redis
 
@@ -41,6 +41,18 @@ _LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
 _LOG_FORMATS: Final = frozenset({"json", "text"})
 _MAX_REDIRECT_URI_LENGTH: Final = 256
 _UNSUPPORTED_REDIRECT_URI_CHARACTERS: Final = frozenset("!$'(),;<>\\")
+_REDIS_CONTROLLED_QUERY_OPTIONS: Final = frozenset(
+    {
+        "decode_responses",
+        "encoding",
+        "encoding_errors",
+        "health_check_interval",
+        "socket_connect_timeout",
+        "socket_timeout",
+        "ssl_cert_reqs",
+        "ssl_check_hostname",
+    }
+)
 
 
 class SettingsError(ValueError):
@@ -261,13 +273,18 @@ class AppSettings:
 
     def create_redis_client(self) -> Redis:
         self.validate()
-        return Redis.from_url(
-            self.redis_url,
-            decode_responses=False,
-            socket_connect_timeout=self.redis_socket_connect_timeout,
-            socket_timeout=self.redis_socket_timeout,
-            health_check_interval=self.redis_health_check_interval,
-        )
+        connection_options: dict[str, object] = {
+            "decode_responses": False,
+            "socket_connect_timeout": self.redis_socket_connect_timeout,
+            "socket_timeout": self.redis_socket_timeout,
+            "health_check_interval": self.redis_health_check_interval,
+        }
+        if self.redis_tls_required:
+            connection_options.update(
+                ssl_cert_reqs="required",
+                ssl_check_hostname=True,
+            )
+        return Redis.from_url(self.redis_url, **connection_options)
 
     def flask_config(self) -> dict[str, object]:
         self.validate()
@@ -544,6 +561,14 @@ def _redirect_uri(value: str) -> str:
 
 def _redis_url(value: str, *, tls_required: bool) -> str:
     parsed = _parsed_url(value, "REDIS_URL", schemes=("redis", "rediss"), allow_credentials=True)
+    controlled_options = {
+        name.casefold()
+        for name, _ in parse_qsl(parsed.query, keep_blank_values=True)
+        if name.casefold() in _REDIS_CONTROLLED_QUERY_OPTIONS
+    }
+    if controlled_options:
+        names = ", ".join(sorted(controlled_options))
+        raise SettingsError(f"REDIS_URL cannot override application-controlled options: {names}")
     if tls_required and parsed.scheme != "rediss":
         raise SettingsError("REDIS_URL must use rediss when REDIS_TLS_REQUIRED is true")
     return value
