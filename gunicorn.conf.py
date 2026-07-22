@@ -28,18 +28,11 @@ workers = _integer_setting("WEB_CONCURRENCY", 2, minimum=1, maximum=1024)
 threads = _integer_setting("GUNICORN_THREADS", 4, minimum=1, maximum=1024)
 worker_class = "gthread"
 timeout = _integer_setting("GUNICORN_TIMEOUT", 30, minimum=1, maximum=3600)
-graceful_timeout = _integer_setting(
-    "GUNICORN_GRACEFUL_TIMEOUT", 30, minimum=1, maximum=3600
-)
+graceful_timeout = _integer_setting("GUNICORN_GRACEFUL_TIMEOUT", 30, minimum=1, maximum=3600)
 keepalive = _integer_setting("GUNICORN_KEEPALIVE", 5, minimum=0, maximum=300)
-max_requests = _integer_setting(
-    "GUNICORN_MAX_REQUESTS", 1000, minimum=0, maximum=10_000_000
-)
+max_requests = _integer_setting("GUNICORN_MAX_REQUESTS", 1000, minimum=0, maximum=10_000_000)
 max_requests_jitter = _integer_setting(
-    "GUNICORN_MAX_REQUESTS_JITTER",
-    100,
-    minimum=0,
-    maximum=1_000_000,
+    "GUNICORN_MAX_REQUESTS_JITTER", 100, minimum=0, maximum=1_000_000
 )
 worker_tmp_dir = "/dev/shm"
 accesslog = "-"

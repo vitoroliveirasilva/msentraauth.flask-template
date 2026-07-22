@@ -66,11 +66,9 @@ class TextLogFormatter(logging.Formatter):
 
 def configure_observability(app: Flask, settings: AppSettings) -> None:
     app.logger.setLevel(getattr(logging, settings.log_level))
-    formatter: logging.Formatter
-    if settings.log_format == "json":
-        formatter = JsonLogFormatter()
-    else:
-        formatter = TextLogFormatter()
+    formatter: logging.Formatter = (
+        JsonLogFormatter() if settings.log_format == "json" else TextLogFormatter()
+    )
     for handler in app.logger.handlers:
         handler.setFormatter(formatter)
 

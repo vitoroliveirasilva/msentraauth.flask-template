@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from flask import Flask
 
 _DEFAULT_CALLBACK_PATH = "/auth/callback"
 _CALLBACK_ENDPOINT = "ms_entra_auth.callback"
 _ALIAS_ENDPOINT = "msentraauth_template.callback_alias"
-_MAX_CALLBACK_PATH_LENGTH = 2048
+_MAX_CALLBACK_PATH_LENGTH = 256
 
 
 class CallbackAliasError(RuntimeError):
@@ -17,7 +17,7 @@ class CallbackAliasError(RuntimeError):
 def register_callback_alias(app: Flask, redirect_uri: str) -> None:
     # Vincula um callback legado de mesma origem à view segura da extensão
 
-    callback_path = urlsplit(redirect_uri).path
+    callback_path = unquote(urlsplit(redirect_uri).path)
     if callback_path == _DEFAULT_CALLBACK_PATH:
         return
     if not callback_path or callback_path == "/":

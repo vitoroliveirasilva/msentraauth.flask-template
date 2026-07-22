@@ -16,6 +16,7 @@ from .storage import RedisClient
 
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 _MAX_SESSION_BYTES = 64 * 1024
+_STATELESS_PATHS = frozenset({"/health/live", "/health/ready"})
 
 
 class SessionBackendError(RuntimeError):
@@ -37,6 +38,7 @@ class RedisSession(CallbackDict[str, object], SessionMixin):
         new: bool,
         discard_cookie: bool = False,
         backend_available: bool = True,
+        stateless: bool = False,
     ) -> None:
         def on_update(_: object) -> None:
             self.modified = True
@@ -48,6 +50,7 @@ class RedisSession(CallbackDict[str, object], SessionMixin):
         self.accessed = False
         self.discard_cookie = discard_cookie
         self.backend_available = backend_available
+        self.stateless = stateless
 
     def __getitem__(self, key: str) -> Any:
         self.accessed = True
@@ -82,6 +85,9 @@ class RedisSessionInterface(SessionInterface):
         self._key_prefix = key_prefix
 
     def open_session(self, app: Flask, request: Request) -> RedisSession:
+        if self._is_stateless_request(app, request):
+            return self._fresh_session(app, stateless=True)
+
         signed_sid = request.cookies.get(self.get_cookie_name(app))
         sid = self._unsign_sid(app, signed_sid) if signed_sid else None
         if sid is None:
@@ -92,12 +98,18 @@ class RedisSessionInterface(SessionInterface):
             app.logger.error("server-side session load failed")
             return self._fresh_session(app, backend_available=False)
         if payload is None:
-            return self._fresh_session(app, discard_cookie=True)
-        if len(payload) > _MAX_SESSION_BYTES:
+            # Não expire o cookie aqui: uma resposta concorrente com o SID antigo
+            # poderia apagar o cookie recém-rotacionado emitido por outra resposta.
+            return self._fresh_session(app)
+        if not isinstance(payload, (bytes, bytearray)):
+            app.logger.error("server-side session backend returned an invalid payload type")
+            return self._fresh_session(app, backend_available=False)
+        payload_bytes = bytes(payload)
+        if len(payload_bytes) > _MAX_SESSION_BYTES:
             app.logger.warning("server-side session payload exceeded the accepted size")
             return self._fresh_session(app, discard_cookie=True)
         try:
-            decoded = self.serializer.loads(payload.decode("utf-8"))
+            decoded = self.serializer.loads(payload_bytes.decode("utf-8"))
         except Exception:
             app.logger.warning("server-side session payload was invalid")
             return self._fresh_session(app, discard_cookie=True)
@@ -109,6 +121,8 @@ class RedisSessionInterface(SessionInterface):
     def save_session(self, app: Flask, session: SessionMixin, response: Response) -> None:
         if not isinstance(session, RedisSession):
             raise TypeError("session must be RedisSession")
+        if session.stateless:
+            return
         if session.accessed:
             response.vary.add("Cookie")
         if not session.backend_available:
@@ -117,11 +131,19 @@ class RedisSessionInterface(SessionInterface):
         cookie_name = self.get_cookie_name(app)
         key = self._key(session.sid)
         if not self._has_session_data(session):
-            if session.modified or session.discard_cookie or not session.new:
+            if session.discard_cookie:
+                self._delete_cookie(app, response, cookie_name)
+                return
+            if not session.new:
                 try:
                     self._client.delete(key)
-                except Exception:
-                    app.logger.error("server-side session deletion failed")
+                except Exception as exc:
+                    app.logger.error(
+                        "server-side session deletion failed",
+                        extra={"error_type": type(exc).__name__, "status_code": 503},
+                    )
+                    self._replace_response_with_error(response, status_code=503, retry_after=5)
+                    return
                 self._delete_cookie(app, response, cookie_name)
             return
 
@@ -133,9 +155,22 @@ class RedisSessionInterface(SessionInterface):
                 self._delete_cookie(app, response, cookie_name)
             return
 
-        payload = self.serializer.dumps(dict(session)).encode("utf-8")
+        try:
+            payload = self.serializer.dumps(dict(session)).encode("utf-8")
+        except Exception as exc:
+            app.logger.error(
+                "server-side session serialization failed",
+                extra={"error_type": type(exc).__name__, "status_code": 500},
+            )
+            self._replace_response_with_error(response, status_code=500)
+            return
         if len(payload) > _MAX_SESSION_BYTES:
-            raise SessionBackendError("server-side session payload is too large")
+            app.logger.error(
+                "server-side session payload is too large",
+                extra={"status_code": 500},
+            )
+            self._replace_response_with_error(response, status_code=500)
+            return
         ttl = int(app.permanent_session_lifetime.total_seconds())
         try:
             result = self._client.set(
@@ -146,10 +181,19 @@ class RedisSessionInterface(SessionInterface):
                 xx=not session.new,
             )
         except Exception as exc:
-            app.logger.error("server-side session save failed")
-            raise SessionBackendError("server-side session save failed") from exc
+            app.logger.error(
+                "server-side session save failed",
+                extra={"error_type": type(exc).__name__, "status_code": 503},
+            )
+            self._replace_response_with_error(response, status_code=503, retry_after=5)
+            return
         if not result:
-            raise SessionBackendError("server-side session save failed")
+            app.logger.warning(
+                "server-side session conditional save was rejected",
+                extra={"status_code": 503},
+            )
+            self._replace_response_with_error(response, status_code=503, retry_after=5)
+            return
 
         session.new = False
         session.discard_cookie = False
@@ -195,6 +239,7 @@ class RedisSessionInterface(SessionInterface):
         *,
         discard_cookie: bool = False,
         backend_available: bool = True,
+        stateless: bool = False,
     ) -> RedisSession:
         return self.session_class(
             {},
@@ -202,7 +247,54 @@ class RedisSessionInterface(SessionInterface):
             new=True,
             discard_cookie=discard_cookie,
             backend_available=backend_available,
+            stateless=stateless,
         )
+
+    @staticmethod
+    def _is_stateless_request(app: Flask, request: Request) -> bool:
+        if request.path in _STATELESS_PATHS:
+            return True
+        static_path = (app.static_url_path or "").rstrip("/")
+        return bool(
+            static_path
+            and static_path != "/"
+            and (request.path == static_path or request.path.startswith(f"{static_path}/"))
+        )
+
+    @staticmethod
+    def _replace_response_with_error(
+        response: Response,
+        *,
+        status_code: int,
+        retry_after: int | None = None,
+    ) -> None:
+        body = "Service Unavailable\n" if status_code == 503 else "Internal Server Error\n"
+        response.direct_passthrough = False
+        response.status_code = status_code
+        response.set_data(body)
+        response.content_type = "text/plain; charset=utf-8"
+        for header in (
+            "Accept-Ranges",
+            "Allow",
+            "Content-Disposition",
+            "Content-Encoding",
+            "Content-Location",
+            "Content-Range",
+            "Digest",
+            "ETag",
+            "Last-Modified",
+            "Location",
+            "Set-Cookie",
+            "WWW-Authenticate",
+        ):
+            if header in response.headers:
+                del response.headers[header]
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        if retry_after is None:
+            response.headers.pop("Retry-After", None)
+        else:
+            response.headers["Retry-After"] = str(retry_after)
 
     @staticmethod
     def _has_session_data(session: RedisSession) -> bool:
@@ -241,7 +333,7 @@ def register_session_backend_guard(app: Flask) -> None:
     def ensure_session_backend_available() -> None:
         if request.endpoint is None or request.endpoint in {"static", "web.live", "web.ready"}:
             return
-        current = session._get_current_object()
+        current = session
         if isinstance(current, RedisSession) and not current.backend_available:
             raise SessionBackendUnavailable("server-side session backend is unavailable")
 

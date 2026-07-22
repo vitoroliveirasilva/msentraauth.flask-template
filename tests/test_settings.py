@@ -156,11 +156,19 @@ def test_defaults_and_redis_factory(monkeypatch: pytest.MonkeyPatch) -> None:
         ("APP_BASE_URL", "relative", "absolute"),
         ("APP_BASE_URL", "https://user:pass@example.test", "safe"),
         ("APP_BASE_URL", "https://example.test/#fragment", "fragment"),
+        ("APP_BASE_URL", "http://localhost:5000?tenant=x", "query"),
+        ("APP_BASE_URL", "http://localhost:5000/%0Apath", "control"),
+        (r"APP_BASE_URL", r"http://localhost:5000\path", "backslash"),
         ("APP_BASE_URL", "http://localhost:invalid", "invalid port"),
         ("APP_BASE_URL", "http://localhost:0", "invalid port"),
         ("MS_ENTRA_SCOPES", "Mail.Read", "User.Read"),
         ("REDIS_URL", "https://example.test", "absolute"),
         ("GRAPH_BASE_URL", "http://localhost:5000/v1.0", "HTTPS"),
+        ("GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0?tenant=x", "query"),
+        ("MS_ENTRA_REDIRECT_URI", "http://localhost:5000/auth/call;back", "unsupported"),
+        ("MS_ENTRA_REDIRECT_URI", "http://localhost:5000/auth/%3Ccallback%3E", "unsupported"),
+        (r"MS_ENTRA_REDIRECT_URI", r"http://localhost:5000/auth\callback", "unsupported"),
+        ("MS_ENTRA_REDIRECT_URI", "http://localhost:5000/auth/%0Acallback", "control"),
     ],
 )
 def test_rejects_invalid_values(name: str, value: str, message: str) -> None:
@@ -258,6 +266,23 @@ def test_redirect_origin_trusted_host_and_samesite_are_validated() -> None:
         AppSettings.from_env(env)
 
 
+def test_redirect_uri_limits_idn_and_single_tenant_query_support() -> None:
+    query = valid_env()
+    query["MS_ENTRA_REDIRECT_URI"] = "http://localhost:5000/auth/callback?source=corporate"
+    assert AppSettings.from_env(query).redirect_uri.endswith("?source=corporate")
+
+    too_long = valid_env()
+    too_long["MS_ENTRA_REDIRECT_URI"] = "http://localhost:5000/" + ("a" * 240)
+    with pytest.raises(SettingsError, match="256"):
+        AppSettings.from_env(too_long)
+
+    for hostname in ("tést.example", "xn--tst-bma.example"):
+        internationalized = valid_env()
+        internationalized["MS_ENTRA_REDIRECT_URI"] = f"https://{hostname}/auth/callback"
+        with pytest.raises(SettingsError, match="internationalized"):
+            AppSettings.from_env(internationalized)
+
+
 def test_subdomain_trust_default_ports_redis_credentials_and_loopback_are_supported() -> None:
     env = valid_env()
     env.update(
@@ -301,7 +326,7 @@ def test_directly_constructed_settings_are_validated(settings: AppSettings) -> N
         non_finite.flask_config()
 
     insufficient_scope = replace(settings, scopes=("Mail.Read",))
-    with pytest.raises(SettingsError, match="User.Read"):
+    with pytest.raises(SettingsError, match=r"User\.Read"):
         insufficient_scope.flask_config()
 
 
@@ -331,6 +356,9 @@ def test_directly_constructed_settings_are_validated(settings: AppSettings) -> N
         ({"cookie_samesite": "wild"}, "SESSION_COOKIE_SAMESITE"),
         ({"graph_connect_timeout": "1"}, "GRAPH_CONNECT_TIMEOUT_SECONDS"),
         ({"graph_connect_timeout": True}, "GRAPH_CONNECT_TIMEOUT_SECONDS"),
+        ({"base_url": "http://localhost:5000?tenant=x"}, "query"),
+        ({"graph_base_url": "https://graph.microsoft.com/v1.0?tenant=x"}, "query"),
+        ({"redirect_uri": "http://localhost:5000/auth/call;back"}, "unsupported"),
         ({"proxy_hops": object()}, "proxy_hops"),
         ({"proxy_hops": ProxyHops(x_for=-1)}, "PROXY_X_FOR"),
         ({"proxy_hops": ProxyHops(x_for=6)}, "PROXY_X_FOR"),

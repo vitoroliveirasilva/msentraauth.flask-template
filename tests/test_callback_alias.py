@@ -60,8 +60,10 @@ def test_rejects_missing_or_root_callback_paths(redirect_uri: str) -> None:
         "callback",
         "http://localhost:5000//callback",
         "http://localhost:5000/<path:callback>",
+        "http://localhost:5000/%3Cpath:callback%3E",
+        "http://localhost:5000/%2F%2Fcallback",
         r"http://localhost:5000/callback\legacy",
-        "http://localhost:5000/" + ("a" * 2048),
+        "http://localhost:5000/" + ("a" * 256),
     ],
 )
 def test_rejects_dynamic_or_unsafe_callback_paths(redirect_uri: str) -> None:

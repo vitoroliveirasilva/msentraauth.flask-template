@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 from math import isfinite
 from typing import Final
-from urllib.parse import SplitResult, urlsplit
+from urllib.parse import SplitResult, unquote, urlsplit
 
 from redis import Redis
 
@@ -14,6 +14,8 @@ _PLACEHOLDERS: Final = ("substitua", "changeme", "replace", "gere-uma-chave")
 _ENVIRONMENTS: Final = frozenset({"development", "testing", "production"})
 _LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 _LOG_FORMATS: Final = frozenset({"json", "text"})
+_MAX_REDIRECT_URI_LENGTH: Final = 256
+_UNSUPPORTED_REDIRECT_URI_CHARACTERS: Final = frozenset("!$'(),;<>\\")
 
 
 class SettingsError(ValueError):
@@ -69,7 +71,7 @@ class AppSettings:
         testing = _boolean(values, "TESTING", default=environment == "testing")
         csrf_enabled = _boolean(values, "WTF_CSRF_ENABLED", default=not testing)
         secret_key = _secret(values, "APP_SECRET_KEY", minimum=32)
-        base_url = _web_url(_text(values, "APP_BASE_URL"), "APP_BASE_URL")
+        base_url = _base_url(_text(values, "APP_BASE_URL"))
         trusted_hosts = _csv(values, "APP_TRUSTED_HOSTS", default="localhost,127.0.0.1")
         log_level = _log_level(_text(values, "APP_LOG_LEVEL", default="INFO"))
         log_format = _choice(
@@ -85,10 +87,7 @@ class AppSettings:
             default=environment == "production",
         )
         cookie_samesite = _samesite(_text(values, "SESSION_COOKIE_SAMESITE", default="Lax"))
-        redirect_uri = _web_url(
-            _text(values, "MS_ENTRA_REDIRECT_URI"),
-            "MS_ENTRA_REDIRECT_URI",
-        )
+        redirect_uri = _redirect_uri(_text(values, "MS_ENTRA_REDIRECT_URI"))
         redis_tls_required = _boolean(
             values,
             "REDIS_TLS_REQUIRED",
@@ -164,7 +163,7 @@ class AppSettings:
         _require_canonical(self.environment, environment, "APP_ENV")
         secret_key = _validate_secret_value(self.secret_key, "APP_SECRET_KEY", minimum=32)
         _require_canonical(self.secret_key, secret_key, "APP_SECRET_KEY")
-        base_url = _web_url(_required_text_value(self.base_url, "APP_BASE_URL"), "APP_BASE_URL")
+        base_url = _base_url(_required_text_value(self.base_url, "APP_BASE_URL"))
         base_url = base_url.rstrip("/")
         _require_canonical(self.base_url, base_url, "APP_BASE_URL")
         trusted_hosts = _validate_string_values(self.trusted_hosts, "APP_TRUSTED_HOSTS")
@@ -185,9 +184,8 @@ class AppSettings:
         _require_canonical(self.client_secret, client_secret, "MS_ENTRA_CLIENT_SECRET")
         tenant_id = _required_text_value(self.tenant_id, "MS_ENTRA_TENANT_ID")
         _require_canonical(self.tenant_id, tenant_id, "MS_ENTRA_TENANT_ID")
-        redirect_uri = _web_url(
-            _required_text_value(self.redirect_uri, "MS_ENTRA_REDIRECT_URI"),
-            "MS_ENTRA_REDIRECT_URI",
+        redirect_uri = _redirect_uri(
+            _required_text_value(self.redirect_uri, "MS_ENTRA_REDIRECT_URI")
         )
         _require_canonical(self.redirect_uri, redirect_uri, "MS_ENTRA_REDIRECT_URI")
         scopes = _validate_string_values(self.scopes, "MS_ENTRA_SCOPES")
@@ -467,18 +465,51 @@ def _samesite(value: str) -> str:
 
 
 def _web_url(value: str, name: str) -> str:
+    decoded = unquote(value)
+    if "\\" in decoded:
+        raise SettingsError(f"{name} cannot contain a backslash")
     parsed = _parsed_url(value, name, schemes=("https", "http"), allow_credentials=False)
     if parsed.scheme == "http" and not _is_loopback(parsed.hostname):
         raise SettingsError(f"{name} must use HTTPS outside loopback")
     return value
 
 
+def _base_url(value: str) -> str:
+    name = "APP_BASE_URL"
+    parsed = _web_url(value, name)
+    if urlsplit(parsed).query:
+        raise SettingsError(f"{name} cannot contain a query")
+    return parsed
+
+
 def _https_url(value: str, name: str) -> str:
     parsed = urlsplit(value)
     if parsed.scheme != "https":
         raise SettingsError(f"{name} must use HTTPS")
-    _parsed_url(value, name, schemes=("https",), allow_credentials=False)
+    parsed = _parsed_url(value, name, schemes=("https",), allow_credentials=False)
+    if parsed.query:
+        raise SettingsError(f"{name} cannot contain a query")
     return value
+
+
+def _redirect_uri(value: str) -> str:
+    name = "MS_ENTRA_REDIRECT_URI"
+    if len(value) > _MAX_REDIRECT_URI_LENGTH:
+        raise SettingsError(f"{name} cannot exceed {_MAX_REDIRECT_URI_LENGTH} characters")
+    decoded = unquote(value)
+    if any(character in decoded for character in _UNSUPPORTED_REDIRECT_URI_CHARACTERS):
+        raise SettingsError(f"{name} contains an unsupported character")
+    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
+        raise SettingsError(f"{name} contains a control character")
+    parsed = _web_url(value, name)
+    hostname = urlsplit(parsed).hostname or ""
+    try:
+        hostname.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise SettingsError(f"{name} cannot use an internationalized domain name") from exc
+    if any(label.lower().startswith("xn--") for label in hostname.split(".")):
+        raise SettingsError(f"{name} cannot use an internationalized domain name")
+    return parsed
 
 
 def _redis_url(value: str, *, tls_required: bool) -> str:
@@ -495,6 +526,9 @@ def _parsed_url(
     schemes: tuple[str, ...],
     allow_credentials: bool,
 ) -> SplitResult:
+    decoded = unquote(value)
+    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
+        raise SettingsError(f"{name} contains a control character")
     parsed = urlsplit(value)
     credentials_present = parsed.username is not None or parsed.password is not None
     if (

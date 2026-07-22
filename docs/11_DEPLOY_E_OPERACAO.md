@@ -22,9 +22,9 @@ As variáveis numéricas do Gunicorn são validadas na inicialização. Valores 
 
 ## GitHub Container Registry
 
-A publicação de uma Release dispara o workflow `Publish container`. A versão da tag deve corresponder ao campo `project.version` do `pyproject.toml` e o checkout precisa apontar exatamente para o commit dessa tag.
+A publicação de uma Release dispara o workflow `Publish container`. A versão da tag deve corresponder ao campo `project.version` do `pyproject.toml`, o checkout precisa apontar exatamente para o commit dessa tag e a tag deve pertencer ao histórico da branch `prod`.
 
-A execução manual aceita somente a branch `prod` ou a própria tag versionada. Mesmo nesses casos, o workflow compara o `HEAD` com o commit da tag antes de autenticar e publicar, evitando imagens sem correspondência com uma versão imutável.
+A execução manual aceita somente a branch `prod` ou a própria tag versionada. O workflow compara o `HEAD` com o commit da tag e confirma a ancestralidade em `prod` antes de construir ou autenticar, evitando imagens sem correspondência com uma versão imutável.
 
 A imagem é publicada em:
 
@@ -42,7 +42,7 @@ latest
 sha-<commit>
 ```
 
-A imagem inclui metadados OCI de versão e revisão, SBOM e proveniência de build. O workflow publica variantes para `linux/amd64` e `linux/arm64` e executa um smoke test contra Redis real antes de concluir.
+A imagem inclui metadados OCI de versão e revisão, SBOM e proveniência de build. Antes do push, o workflow constrói uma candidata `linux/amd64` e executa smoke test contra Redis real. Somente depois publica as variantes `linux/amd64` e `linux/arm64` e verifica o digest resultante.
 
 Download:
 
@@ -60,7 +60,7 @@ O fluxo recomendado é:
 
 1. Aprovar a CI da branch `prod`;
 2. Criar uma Release com tag `v<versão>` apontando para o commit aprovado;
-3. Aguardar a validação da fonte, a publicação e o smoke test da imagem;
+3. Aguardar a validação da fonte, o smoke test pré-publicação, o push multi-plataforma e a verificação do digest;
 4. Tornar o Package público na primeira publicação;
 5. Validar o pull pelo digest exibido no resumo do workflow.
 

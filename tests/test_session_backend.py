@@ -23,6 +23,7 @@ def make_app(
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SECURE=False,
         SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_PERMANENT=True,
         SESSION_REFRESH_EACH_REQUEST=False,
     )
     app.permanent_session_lifetime = timedelta(seconds=60)
@@ -97,7 +98,7 @@ def test_missing_expired_corrupt_and_non_mapping_payloads(
         missing = interface.open_session(app, request)
     assert missing.new is True
     assert missing.sid != sid
-    assert missing.discard_cookie is True
+    assert missing.discard_cookie is False
 
     redis_double.set(f"msentra-template:session:{sid}", b"not-json")
     with app.test_request_context("/", headers={"Cookie": f"session={signed}"}):
@@ -142,7 +143,48 @@ def test_load_failure_and_invalid_signature_create_fresh_session(
     assert "Max-Age=0" in response.headers["Set-Cookie"]
 
 
-def test_stale_cookie_is_deleted_without_session_refresh(redis_double: RedisDouble) -> None:
+def test_invalid_backend_payload_type_is_treated_as_unavailable(
+    redis_double: RedisDouble,
+) -> None:
+    app, interface = make_app(redis_double)
+    sid = interface._new_sid()
+    signed = interface._sign_sid(app, sid)
+    redis_double.forced_get = "decoded-by-mistake"
+
+    with app.test_request_context("/", headers={"Cookie": f"session={signed}"}):
+        failed = interface.open_session(app, request)
+
+    assert failed.backend_available is False
+    assert failed.discard_cookie is False
+    response = Response()
+    interface.save_session(app, failed, response)
+    assert "Set-Cookie" not in response.headers
+
+
+def test_stateless_paths_skip_redis_loading_and_persistence(
+    redis_double: RedisDouble,
+) -> None:
+    app, interface = make_app(redis_double)
+    signed = interface._sign_sid(app, interface._new_sid())
+    redis_double.fail = "get"
+
+    for path in ("/health/live", "/health/ready", "/static/app.css"):
+        with app.test_request_context(path, headers={"Cookie": f"session={signed}"}):
+            opened = interface.open_session(app, request)
+        assert opened.stateless is True
+        assert opened.backend_available is True
+        opened["must_not_persist"] = path
+        redis_double.fail = "set"
+        response = Response("ok")
+        interface.save_session(app, opened, response)
+        assert response.status_code == 200
+        assert "Set-Cookie" not in response.headers
+        redis_double.fail = "get"
+
+
+def test_missing_signed_sid_preserves_cookie_to_avoid_rotation_race(
+    redis_double: RedisDouble,
+) -> None:
     app, interface = make_app(redis_double)
     app.config["SESSION_PERMANENT"] = True
     sid = interface._new_sid()
@@ -151,12 +193,17 @@ def test_stale_cookie_is_deleted_without_session_refresh(redis_double: RedisDoub
     with app.test_request_context("/", headers={"Cookie": f"session={signed}"}):
         fresh = interface.open_session(app, request)
     assert fresh.permanent is False
-    assert fresh.discard_cookie is True
+    assert fresh.discard_cookie is False
 
-    response = Response()
-    interface.save_session(app, fresh, response)
-    assert "Max-Age=0" in response.headers["Set-Cookie"]
-    assert redis_double.get(f"msentra-template:session:{fresh.sid}") is None
+    empty_response = Response()
+    interface.save_session(app, fresh, empty_response)
+    assert "Set-Cookie" not in empty_response.headers
+
+    fresh["value"] = "new-state"
+    persisted_response = Response()
+    interface.save_session(app, fresh, persisted_response)
+    assert "Set-Cookie" in persisted_response.headers
+    assert redis_double.get(f"msentra-template:session:{fresh.sid}") is not None
 
 
 def test_empty_modified_session_deletes_backend_and_cookie(
@@ -176,6 +223,25 @@ def test_empty_unmodified_session_does_nothing(redis_double: RedisDouble) -> Non
     response = Response()
     interface.save_session(app, session, response)
     assert "Set-Cookie" not in response.headers
+    assert redis_double.get(f"msentra-template:session:{session.sid}") is None
+
+
+def test_discard_cookie_is_honored_when_session_data_is_not_refreshed(
+    redis_double: RedisDouble,
+) -> None:
+    app, interface = make_app(redis_double)
+    app.config["SESSION_PERMANENT"] = False
+    session = RedisSession(
+        {"value": "stored"},
+        sid=interface._new_sid(),
+        new=False,
+        discard_cookie=True,
+    )
+    response = Response()
+
+    interface.save_session(app, session, response)
+
+    assert "Max-Age=0" in response.headers["Set-Cookie"]
     assert redis_double.get(f"msentra-template:session:{session.sid}") is None
 
 
@@ -228,18 +294,60 @@ def test_prefix_payload_limits_and_backend_save_failures(
 
     huge = RedisSession({"value": "x" * (64 * 1024)}, sid=interface._new_sid(), new=True)
     huge.modified = True
-    with pytest.raises(SessionBackendError, match="too large"):
-        interface.save_session(app, huge, Response())
+    oversized_response = Response("must-not-leak", headers={"Location": "/profile"})
+    interface.save_session(app, huge, oversized_response)
+    assert oversized_response.status_code == 500
+    assert oversized_response.get_data(as_text=True) == "Internal Server Error\n"
+    assert "Location" not in oversized_response.headers
+
+    invalid = RedisSession({"value": object()}, sid=interface._new_sid(), new=True)
+    invalid.modified = True
+    invalid_response = Response("must-not-leak")
+    interface.save_session(app, invalid, invalid_response)
+    assert invalid_response.status_code == 500
+    assert invalid_response.get_data(as_text=True) == "Internal Server Error\n"
 
     failing = RedisSession({"value": "x"}, sid=interface._new_sid(), new=True)
     failing.modified = True
     redis_double.fail = "set"
-    with pytest.raises(SessionBackendError, match="save failed"):
-        interface.save_session(app, failing, Response())
+    failed_response = Response(
+        "must-not-leak",
+        status=302,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Allow": "GET",
+            "Content-Disposition": "attachment; filename=secret.txt",
+            "Content-Location": "/private",
+            "Digest": "sha-256=secret",
+            "ETag": '"secret"',
+            "Location": "/profile",
+            "Set-Cookie": "other=value",
+            "WWW-Authenticate": 'Bearer realm="private"',
+        },
+    )
+    interface.save_session(app, failing, failed_response)
+    assert failed_response.status_code == 503
+    assert failed_response.get_data(as_text=True) == "Service Unavailable\n"
+    assert failed_response.headers["Retry-After"] == "5"
+    for header in (
+        "Accept-Ranges",
+        "Allow",
+        "Content-Disposition",
+        "Content-Location",
+        "Digest",
+        "ETag",
+        "Location",
+        "Set-Cookie",
+        "WWW-Authenticate",
+    ):
+        assert header not in failed_response.headers
+
     redis_double.fail = None
     redis_double.return_false = True
-    with pytest.raises(SessionBackendError, match="save failed"):
-        interface.save_session(app, failing, Response())
+    rejected_response = Response("must-not-leak")
+    interface.save_session(app, failing, rejected_response)
+    assert rejected_response.status_code == 503
+    assert rejected_response.headers["Retry-After"] == "5"
 
 
 def test_rotation_prevents_stale_request_from_resurrecting_old_sid(
@@ -255,8 +363,10 @@ def test_rotation_prevents_stale_request_from_resurrecting_old_sid(
     stale.modified = True
     interface.regenerate(app, active)
 
-    with pytest.raises(SessionBackendError, match="save failed"):
-        interface.save_session(app, stale, Response())
+    stale_response = Response("must-not-leak")
+    interface.save_session(app, stale, stale_response)
+    assert stale_response.status_code == 503
+    assert stale_response.headers["Retry-After"] == "5"
     assert redis_double.get(f"msentra-template:session:{old_sid}") is None
 
     interface.save_session(app, active, Response())
@@ -267,11 +377,16 @@ def test_rotation_prevents_stale_request_from_resurrecting_old_sid(
 def test_delete_and_regeneration_failure_paths(redis_double: RedisDouble) -> None:
     app, interface = make_app(redis_double)
     empty = RedisSession({"value": "x"}, sid=interface._new_sid(), new=False)
+    redis_double.set(f"msentra-template:session:{empty.sid}", b"stored")
     empty.clear()
     redis_double.fail = "delete"
-    response = Response()
+    response = Response("logout-complete", status=302, headers={"Location": "/logged-out"})
     interface.save_session(app, empty, response)
-    assert "Max-Age=0" in response.headers["Set-Cookie"]
+    assert response.status_code == 503
+    assert response.get_data(as_text=True) == "Service Unavailable\n"
+    assert response.headers["Retry-After"] == "5"
+    assert "Location" not in response.headers
+    assert "Set-Cookie" not in response.headers
 
     with pytest.raises(TypeError, match="RedisSession"):
         interface.regenerate(app, object())  # type: ignore[arg-type]

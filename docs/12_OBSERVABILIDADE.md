@@ -10,7 +10,7 @@ Erros inesperados do transporte Graph permanecem erros internos, em vez de serem
 O access log do Gunicorn não usa a linha de requisição completa e omite deliberadamente a query string.
 
 - `/health/live`: confirma que o processo Flask responde e permanece independente do Redis;
-- `/health/ready`: confirma que o Redis responde a `PING`;
+- `/health/ready`: confirma `PING` e um ciclo efêmero de gravação e consumo atômico no Redis;
 - Rotas dependentes de sessão retornam `503` com `Retry-After` quando a leitura da sessão falha, sem apagar o cookie existente.
 - Sessões anônimas vazias não criam cookie nem chave Redis.
 

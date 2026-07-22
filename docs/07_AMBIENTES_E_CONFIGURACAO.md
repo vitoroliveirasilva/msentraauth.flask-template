@@ -10,7 +10,7 @@ Loopback HTTP, cookie não-secure e Redis local são permitidos. CSRF pode ser d
 
 ## Produção
 
-- `APP_BASE_URL` e redirect URI HTTPS na mesma origem;
+- `APP_BASE_URL` e redirect URI HTTPS na mesma origem, sem controles, backslash ou query no endereço-base;
 - Host da aplicação presente em `APP_TRUSTED_HOSTS`;
 - `SESSION_COOKIE_SECURE=true`;
 - Secret de sessão com pelo menos 32 caracteres aleatórios;
@@ -19,7 +19,9 @@ Loopback HTTP, cookie não-secure e Redis local são permitidos. CSRF pode ser d
 - `REDIS_TLS_REQUIRED=true` e URI `rediss://`;
 - `TESTING=false` e `WTF_CSRF_ENABLED=true`;
 - Timeouts positivos e finitos, sem `NaN` ou infinito;
-- Portas válidas e URLs sem fragmentos ou credenciais onde não permitidas.
+- Portas válidas e URLs sem fragmentos ou credenciais onde não permitidas;
+- `GRAPH_BASE_URL` HTTPS sem query string, pois o cliente acrescenta o recurso e os parâmetros OData;
+- Redirect URI com no máximo 256 caracteres, sem controles, caracteres não suportados ou domínio internacionalizado;
 - Callback legado com caminho estático, não-raiz e sem sintaxe dinâmica de rota.
 
 `ProxyFix` permanece desativado até que cada hop confiável seja declarado por `PROXY_X_*`. Valores acima de cinco são rejeitados para evitar configuração acidentalmente ampla.
