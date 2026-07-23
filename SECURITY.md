@@ -8,10 +8,11 @@ refresh token, cookie, SID, cache, claims completas ou dados pessoais reais.
 
 - HTTPS e `SESSION_COOKIE_SECURE=true`;
 - `DEBUG=false`, `TESTING=false` e CSRF ativo;
-- `APP_SECRET_KEY`, `WTF_CSRF_SECRET_KEY` e `SESSION_SIGNING_KEYS` independentes;
+- `APP_SECRET_KEY`, `WTF_CSRF_SECRET_KEY`, `SESSION_SIGNING_KEYS` e `SESSION_PAYLOAD_KEYS` independentes;
 - chaves criptográficas base64 URL-safe que codifiquem pelo menos 32 bytes;
 - secrets fornecidos por secret manager, preferencialmente via variáveis `_FILE`;
-- ring do SID com a chave ativa primeiro e retirada controlada das anteriores;
+- rings do SID e do payload com a chave ativa primeiro e retirada controlada das anteriores;
+- namespace único por aplicação e ambiente, timeout absoluto e revogação operacional testada;
 - App Registration single-tenant, client ID UUID, tenant específico e redirect exata;
 - `User.Read` como escopo mínimo;
 - Microsoft Graph restrito a `https://graph.microsoft.com/v1.0` nesta versão;
@@ -32,5 +33,5 @@ atalhos locais que dupliquem OAuth/OIDC ou aceitem endpoint Graph arbitrário.
 ## Limites
 
 O registro local em memória é demonstrativo e não substitui banco transacional, autorização de
-negócio, trilha de auditoria persistente ou governança de identidades. Integridade e criptografia
-do payload Redis, timeout absoluto e revogação global pertencem à SEC-03.
+negócio, trilha de auditoria persistente ou governança de identidades. A SEC-03 implementa integridade, criptografia, timeout absoluto e revogação no template. ACL,
+separação física, TLS real, backup e restauração do Redis continuam responsabilidades externas.

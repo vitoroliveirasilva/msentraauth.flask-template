@@ -39,6 +39,7 @@ def test_build_contains_application_assets_and_operational_files() -> None:
         names = set(wheel.namelist())
         assert "msentraauth_template/settings.py" in names
         assert "msentraauth_template/session_backend.py" in names
+        assert "msentraauth_template/session_envelope.py" in names
         assert "msentraauth_template/storage.py" in names
         assert "msentraauth_template/graph/client.py" in names
         assert "msentraauth_template/templates/home.html" in names
@@ -47,6 +48,7 @@ def test_build_contains_application_assets_and_operational_files() -> None:
         metadata = wheel.read(metadata_name).decode()
         assert f"Version: {_VERSION}" in metadata
         assert "Requires-Dist: flask-ms-entra-auth==1.0.0" in metadata
+        assert "Requires-Dist: cryptography<47,>=46" in metadata
 
     with tarfile.open(sdists[0], "r:gz") as sdist:
         names = set(sdist.getnames())
@@ -58,6 +60,7 @@ def test_build_contains_application_assets_and_operational_files() -> None:
             "/.github/workflows/dependency-review.yml",
             "/docs/implementation/status.md",
             "/docs/seguranca/08_SUPPLY_CHAIN.md",
+            "/docs/seguranca/10_SESSAO_REDIS.md",
             "/requirements/runtime.constraints.txt",
             "/scripts/validate_supply_chain.py",
             "/tests/test_extension_contract.py",

@@ -4,6 +4,13 @@
 
 ### Segurança
 
+- Payloads de sessão no Redis passam a usar envelope AES-256-GCM versionado, com HKDF, `kid` e rewrap por key ring;
+- Sessões recebem timeout ocioso e absoluto, skew limitado, renovação periódica do SID e cookie limitado ao prazo absoluto;
+- A rotação do SID passa a ser atômica no Redis e mantém proteção contra ressurreição por requisição concorrente;
+- Revogação por SID e por revisão pseudônima de identidade invalida sessões sem persistir identificadores pessoais em claro;
+- Schema, profundidade, quantidade de itens, tipos e tamanhos do payload passam a ser allowlisted e limitados;
+- Sessão, revogação e storage da extensão passam a usar namespaces independentes;
+- Redis TLS aceita CA privada por `REDIS_CA_CERTS_FILE`; ACL, separação física e backup seguro permanecem controles externos;
 - Segredos de Flask, assinatura do SID e CSRF passam a ser separados, com key ring e rotação compatível;
 - Configurações sensíveis podem ser lidas por secret mounts via variáveis `_FILE`;
 - Produção rejeita chaves criptográficas fracas ou reutilizadas, DEBUG, tenant genérico, URL-base com path e hosts curinga;
@@ -11,7 +18,7 @@
 - Respostas Graph são lidas por streaming com limites de corpo, tipo e campos do DTO;
 - 401, 403, 429, 5xx, redirects e claims challenge possuem tratamento separado e sanitizado;
 - `Retry-After` é interpretado com teto configurável e o User-Agent usa a versão instalada;
-- O template detecta CAE sem loop automático e registra a dependência de evolução da extensão.
+- O template detecta CAE sem loop automático e registra a dependência de evolução da extensão;
 - GitHub Actions passam a usar SHAs completos, permissões mínimas e checkout sem credenciais persistidas;
 - Python e Redis são referenciados por digests OCI validados;
 - CI, Docker e scripts usam constraints diretas exatas, com procedimento para locks transitivos com hashes;
@@ -20,7 +27,6 @@
 - Pacotes e imagens recebem checksums, SBOM, provenance, attestations e scanner bloqueante;
 - Dependency Review passa a bloquear dependências de severidade alta ou crítica;
 - O contexto Docker usa allowlist e o Compose restringe rede, senha Redis, capabilities e recursos.
-
 
 ## 1.0.1 - 2026-07-22
 

@@ -30,3 +30,10 @@ SID pertencem à SEC-03.
 Secret manager, política de egress, configuração real do tenant, certificado/workload identity e
 suporte completo a CAE exigem evidência externa ou alteração da extensão. Documentação não marca
 esses controles como concluídos.
+
+## Integridade da sessão
+
+O SID permanece no cookie assinado; o conteúdo Redis é criptografado e autenticado com AES-GCM e
+AAD vinculada a versão, namespace, SID e `kid`. Timestamps e revisão de revogação ficam dentro do
+envelope autenticado. Payload antigo em `TaggedJSON` não é migrado silenciosamente e exige nova
+autenticação. Veja `seguranca/10_SESSAO_REDIS.md` e ADR 012.

@@ -34,25 +34,36 @@
 - Alias de callback com validação autônoma de caracteres de controle e formas inseguras;
 - Documentação operacional e troubleshooting.
 
+- Envelope AES-256-GCM versionado para payload de sessão Redis, com HKDF e key ring;
+- Timeout ocioso e absoluto, atividade amortizada e renovação periódica atômica do SID;
+- Revogação por SID e revisão pseudônima de identidade;
+- Schema estrito, limites antes/depois da proteção e limpeza compare-and-delete;
+- Namespaces independentes para sessão, revogação e auth storage;
+- Suporte a CA privada do Redis por arquivo.
+
 ## Limites
 
-O registro local em memória é demonstrativo, autorização de negócio não está incluída e a configuração real de Entra ID, Redis, proxy, secrets, monitoramento e deploy permanece responsabilidade do consumidor.
+Redis ACL, separação física de credenciais, TLS real e backup/restauração ainda exigem evidência externa. O registro local em memória é demonstrativo, autorização de negócio não está incluída e a configuração real de Entra ID, Redis, proxy, secrets, monitoramento e deploy permanece responsabilidade do consumidor.
 
 ## Programa de hardening de segurança
+
+O hardening de sessão `SEC-03` foi implementado sobre `dev` no SHA `17187caa25bf4003e017e8532568d3d36c45df62` e permanece `PARCIAL` até a suíte integral e Redis TLS real serem executados.
 
 A fundação documental `SEC-00` foi incorporada à branch `dev`. A `SEC-01` endureceu supply chain
 e permanece parcial pelos gates e locks ainda pendentes. A `SEC-02` foi implementada sobre o SHA
 `5e4d24f3522b6105da3538948db8f21bbbb1c675`, com segredos por finalidade, key ring do SID,
 secret mounts, validações fail-fast e transporte Microsoft Graph restrito. A etapa permanece
 `PARCIAL` até a suíte integral ser executada e os controles dependentes da extensão ou da
-infraestrutura receberem evidência real. `SEC-03` a `SEC-06` permanecem abertas.
+infraestrutura receberem evidência real. A `SEC-03` também está implementada parcialmente;
+`SEC-04` a `SEC-06` permanecem abertas.
 
 Consulte:
 
 - [baseline e divergências;](../seguranca/00_BASELINE_E_ESCOPO.md)
 - [matriz de 156 controles;](../seguranca/02_MATRIZ_DE_RISCOS_E_CONTROLES.md)
 - [status rastreável;](../seguranca/07_STATUS.md)
-- [configuração, Entra e Graph.](../seguranca/09_CONFIGURACAO_ENTRA_GRAPH.md)
+- [configuração, Entra e Graph;](../seguranca/09_CONFIGURACAO_ENTRA_GRAPH.md)
+- [sessão Redis e ciclo de vida.](../seguranca/10_SESSAO_REDIS.md)
 
 A conclusão do plano funcional em `docs/13_PLANO_MESTRE.md` não implica conclusão do programa
 de hardening.

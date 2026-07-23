@@ -55,11 +55,18 @@ def create_app(
             x_prefix=resolved.proxy_hops.x_prefix,
         )
 
-    app.session_interface = RedisSessionInterface(client)
+    session_codec = resolved.create_session_codec()
+    app.extensions["template_session_codec"] = session_codec
+    app.session_interface = RedisSessionInterface(
+        client,
+        codec=session_codec,
+        key_prefix=resolved.session_key_prefix,
+        revocation_prefix=resolved.revocation_key_prefix,
+    )
     register_session_backend_guard(app)
     csrf.init_app(app)
 
-    storage = RedisAuthStorage(client)
+    storage = RedisAuthStorage(client, key_prefix=resolved.auth_storage_key_prefix)
     extension = entra_auth.with_runtime(
         storage=storage,
         msal_client_factory=msal_client_factory,

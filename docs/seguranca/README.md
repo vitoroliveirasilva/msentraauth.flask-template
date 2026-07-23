@@ -9,6 +9,8 @@ Este diretório é a fonte de verdade do programa de segurança do
 - Branch de trabalho: `dev`
 - Baseline da `SEC-00`: `f2d20385ff180f016d12622c76554a3838532b74`
 - Baseline da `SEC-01`: `18ee71ca8c7dbddd2fce06738c9ff974306a0861`
+- Baseline da `SEC-02`: `5e4d24f3522b6105da3538948db8f21bbbb1c675`
+- Baseline da `SEC-03`: `17187caa25bf4003e017e8532568d3d36c45df62`
 - Data do baseline: `2026-07-23`
 - Pacote de origem: `Pacote Mestre de Segurança 1.0.0`
 - Controles registrados: **156**
@@ -40,6 +42,7 @@ O repositório já possui um plano mestre funcional com etapas 00 a 08 concluíd
 8. [Status rastreável](07_STATUS.md)
 9. [Supply chain e artefatos](08_SUPPLY_CHAIN.md)
 10. [Configuração, Entra ID e Graph](09_CONFIGURACAO_ENTRA_GRAPH.md)
+11. [Sessão Redis, integridade e ciclo de vida](10_SESSAO_REDIS.md)
 
 ## Estados permitidos
 
@@ -83,4 +86,4 @@ autorização ou publicação build-once, exigem ADR na etapa responsável.
 
 ## Estado da fundação
 
-A documentação da `SEC-00`, o hardening de supply chain da `SEC-01` e o código de configuração/Graph da `SEC-02` estão implementados. As etapas permanecem `PARCIAL` enquanto gates indisponíveis e controles externos ou da extensão não tiverem evidência real.
+A documentação da `SEC-00`, o hardening de supply chain da `SEC-01`, o código de configuração/Graph da `SEC-02` e o hardening de sessão da `SEC-03` estão implementados. As etapas permanecem `PARCIAL` enquanto gates indisponíveis e controles externos ou da extensão não tiverem evidência real.

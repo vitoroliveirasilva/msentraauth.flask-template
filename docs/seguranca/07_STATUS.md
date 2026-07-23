@@ -7,14 +7,16 @@
 - **SEC-01:** `PARCIAL` por ausência de gate completo e locks transitivos com hashes
 - **Baseline SEC-02:** `5e4d24f3522b6105da3538948db8f21bbbb1c675`
 - **SEC-02:** `PARCIAL` até execução integral da suíte e evolução dos contratos bloqueados
+- **Baseline SEC-03:** `17187caa25bf4003e017e8532568d3d36c45df62`
+- **SEC-03:** `PARCIAL` até suíte integral, Redis TLS real e controles externos terem evidência
 
 ## Resumo inicial
 
 | Estado               | Quantidade |
 | -------------------- | ---------: |
-| `CONCLUIDO`          |         39 |
-| `PARCIAL`            |         41 |
-| `PENDENTE`           |         57 |
+| `CONCLUIDO`          |         57 |
+| `PARCIAL`            |         34 |
+| `PENDENTE`           |         46 |
 | `BLOQUEADO_EXTENSAO` |          3 |
 | `BLOQUEADO_EXTERNO`  |         16 |
 | `NAO_APLICAVEL`      |          0 |
@@ -26,7 +28,7 @@
 | `SEC-00` | `PARCIAL`  | Nenhuma         | `docs(security): estabelece baseline e plano mestre de hardening` |
 | `SEC-01` | `PARCIAL`  | SEC-00          | `build(security): torna supply chain e pipeline reproduziveis`    |
 | `SEC-02` | `PARCIAL`  | SEC-01          | `feat(security): endurece configuracao Entra Graph e segredos`    |
-| `SEC-03` | `PENDENTE` | SEC-02          | `feat(security): fortalece Redis e ciclo de vida das sessoes`     |
+| `SEC-03` | `PARCIAL`  | SEC-02          | `feat(security): fortalece Redis e ciclo de vida das sessoes`     |
 | `SEC-04` | `PENDENTE` | SEC-03          | `feat(security): implementa autorizacao deny-by-default`          |
 | `SEC-05` | `PENDENTE` | SEC-04          | `feat(security): protege borda HTTP runtime e observabilidade`    |
 | `SEC-06` | `PENDENTE` | SEC-00 a SEC-05 | `test(security): conclui validacao ofensiva e evidencias`         |
@@ -93,28 +95,28 @@
 | `ID-014`   | `P0` | `SEC-02` | `TEMPLATE`           | `PARCIAL`            | tenant específico validado; validação de issuer pertence à extensão           |
 | `ID-015`   | `P2` | `SEC-02` | `TEMPLATE`           | `CONCLUIDO`          | User-Agent deriva da versão instalada sem dados locais                        |
 | `ID-016`   | `P1` | `SEC-02` | `EXTERNO`            | `BLOQUEADO_EXTERNO`  | destinos mínimos documentados; firewall/egress exige infraestrutura           |
-| `SES-001`  | `P0` | `SEC-03` | `TEMPLATE`           | `PARCIAL`            | SID assinado; payload sem MAC próprio                                         |
-| `SES-002`  | `P1` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | Payload em claro no Redis                                                     |
-| `SES-003`  | `P0` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | TaggedJSON sem envelope formal                                                |
-| `SES-004`  | `P0` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | Derivação central                                                             |
-| `SES-005`  | `P0` | `SEC-03` | `TEMPLATE`           | `PARCIAL`            | Chave única                                                                   |
-| `SES-006`  | `P0` | `SEC-03` | `TEMPLATE`           | `PARCIAL`            | TTL existe                                                                    |
-| `SES-007`  | `P0` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | Ausente                                                                       |
-| `SES-008`  | `P1` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | Rotação após autenticação                                                     |
-| `SES-009`  | `P0` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | Delete e troca separados                                                      |
-| `SES-010`  | `P0` | `SEC-03` | `TEMPLATE`           | `PARCIAL`            | Logout local remove sessão atual                                              |
-| `SES-011`  | `P1` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | Ausente                                                                       |
-| `SES-012`  | `P0` | `SEC-03` | `TEMPLATE`           | `PARCIAL`            | NX/XX existente                                                               |
-| `SES-013`  | `P0` | `SEC-03` | `TEMPLATE`           | `PARCIAL`            | 64 KiB existente                                                              |
-| `SES-014`  | `P0` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | TaggedJSON genérico                                                           |
-| `SES-015`  | `P1` | `SEC-03` | `TEMPLATE`           | `PARCIAL`            | Descarte existente                                                            |
-| `SES-016`  | `P0` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | 503 preserva resposta em falhas                                               |
-| `SES-017`  | `P0` | `SEC-03` | `TEMPLATE`           | `PARCIAL`            | Prefixo fixo                                                                  |
-| `SES-018`  | `P0` | `SEC-03` | `EXTERNO`            | `BLOQUEADO_EXTERNO`  | Responsabilidade externa                                                      |
-| `SES-019`  | `P1` | `SEC-03` | `HIBRIDO_EXTERNO`    | `PENDENTE`           | Mesmo Redis                                                                   |
-| `SES-020`  | `P0` | `SEC-03` | `HIBRIDO_EXTERNO`    | `PARCIAL`            | Implementado                                                                  |
-| `SES-021`  | `P1` | `SEC-03` | `EXTERNO`            | `BLOQUEADO_EXTERNO`  | Externo                                                                       |
-| `SES-022`  | `P2` | `SEC-03` | `TEMPLATE`           | `PENDENTE`           | Não formalizado                                                               |
+| `SES-001`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | AES-256-GCM autentica o payload Redis; SID continua assinado                  |
+| `SES-002`  | `P1` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | payload criptografado por chave AEAD própria                                  |
+| `SES-003`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | envelope v1 com kid, nonce, timestamps e schema estrito                       |
+| `SES-004`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | HKDF com domínio próprio e chave separada do SID/CSRF/Flask                   |
+| `SES-005`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | ring ativo/anterior, rewrap automático e retirada documentada                 |
+| `SES-006`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | idle autenticado, TTL limitado e refresh amortizado                           |
+| `SES-007`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | timeout absoluto autenticado e cookie limitado                                |
+| `SES-008`  | `P1` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | renovação periódica configurável e rotação pós-login                          |
+| `SES-009`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | Lua compara, cria novo SID NX e remove antigo atomicamente                    |
+| `SES-010`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | logout e API revoke_session removem SID atual                                 |
+| `SES-011`  | `P1` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | revisão pseudônima persistente invalida todas as sessões do usuário           |
+| `SES-012`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | NX/XX preservados e corrida de SID coberta por regressão                      |
+| `SES-013`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | limites antes/depois de AEAD e campos/coleções limitados                      |
+| `SES-014`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | allowlist para \_permanent, metadata da extensão e chaves declaradas          |
+| `SES-015`  | `P1` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | compare-and-delete evita apagar valor concorrente                             |
+| `SES-016`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | 500/503 sanitizados e fail-safe por operação                                  |
+| `SES-017`  | `P0` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | namespace único gera prefixos session/auth/revocation                         |
+| `SES-018`  | `P0` | `SEC-03` | `EXTERNO`            | `BLOQUEADO_EXTERNO`  | ACL Redis de menor privilégio exige infraestrutura real                       |
+| `SES-019`  | `P1` | `SEC-03` | `HIBRIDO_EXTERNO`    | `PARCIAL`            | prefixos e contrato separados; credenciais/instâncias físicas são externas    |
+| `SES-020`  | `P0` | `SEC-03` | `HIBRIDO_EXTERNO`    | `PARCIAL`            | rediss, hostname e CA privada suportados; teste TLS real indisponível         |
+| `SES-021`  | `P1` | `SEC-03` | `EXTERNO`            | `BLOQUEADO_EXTERNO`  | backup/restauração sem segredos exige operação real                           |
+| `SES-022`  | `P2` | `SEC-03` | `TEMPLATE`           | `CONCLUIDO`          | skew configurável limitado a 300 segundos e timestamps autenticados           |
 | `AUTH-001` | `P0` | `SEC-04` | `HIBRIDO_CONSUMIDOR` | `PENDENTE`           | Implícito                                                                     |
 | `AUTH-002` | `P0` | `SEC-04` | `HIBRIDO_CONSUMIDOR` | `PENDENTE`           | Ausente                                                                       |
 | `AUTH-003` | `P0` | `SEC-04` | `HIBRIDO_CONSUMIDOR` | `PENDENTE`           | Documentado                                                                   |

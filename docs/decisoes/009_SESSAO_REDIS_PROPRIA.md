@@ -22,3 +22,9 @@ A ausência de uma chave para um SID ainda corretamente assinado cria uma sessã
 - Falhas transitórias do Redis não destroem a referência de uma sessão ainda válida nem confirmam operações que não foram persistidas;
 - Static assets e health checks não pagam o custo de leitura de sessão;
 - Evolução de serializer, cookie, indisponibilidade ou estratégia de concorrência exige testes de compatibilidade e migração explícita.
+
+## Evolução SEC-03
+
+A decisão de manter uma `SessionInterface` própria permanece. O formato e a rotação foram
+endurecidos pelo ADR 012: novos payloads usam envelope AEAD versionado, timeouts autenticados,
+revogação e rotação atômica. `TaggedJSON` deixa de ser formato persistente aceito.

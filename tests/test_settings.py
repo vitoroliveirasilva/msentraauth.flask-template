@@ -29,7 +29,14 @@ def valid_env() -> dict[str, str]:
         "REDIS_CONNECT_TIMEOUT_SECONDS": "1.25",
         "REDIS_READ_TIMEOUT_SECONDS": "2.5",
         "REDIS_HEALTH_CHECK_INTERVAL_SECONDS": "20",
+        "SESSION_NAMESPACE": "template-test",
         "SESSION_LIFETIME_SECONDS": "7200",
+        "SESSION_ABSOLUTE_TIMEOUT_SECONDS": "28800",
+        "SESSION_SID_RENEWAL_SECONDS": "900",
+        "SESSION_CLOCK_SKEW_SECONDS": "30",
+        "SESSION_ACTIVITY_UPDATE_SECONDS": "60",
+        "SESSION_ALLOWED_KEYS": "cart_id,locale,cart_id",
+        "SESSION_SCHEMA_STRICT": "true",
         "SESSION_REFRESH_EACH_REQUEST": "false",
         "SESSION_COOKIE_SECURE": "false",
         "SESSION_COOKIE_SAMESITE": "strict",
@@ -52,7 +59,9 @@ def production_env() -> dict[str, str]:
         APP_ENV="production",
         APP_SECRET_KEY=cryptographic_key(10),
         SESSION_SIGNING_KEYS=f"{cryptographic_key(20)},{cryptographic_key(30)}",
+        SESSION_PAYLOAD_KEYS=f"{cryptographic_key(21)},{cryptographic_key(31)}",
         WTF_CSRF_SECRET_KEY=cryptographic_key(40),
+        SESSION_NAMESPACE="msentra-template-prod",
         APP_BASE_URL="https://app.example.test",
         APP_TRUSTED_HOSTS="app.example.test",
         MS_ENTRA_CLIENT_ID="11111111-1111-1111-1111-111111111111",
@@ -80,6 +89,10 @@ def test_loads_normalizes_and_exports_secure_configuration() -> None:
     assert settings.session_signing_keys == ()
     assert settings.effective_session_signing_keys == (settings.secret_key,)
     assert settings.effective_csrf_secret_key == settings.secret_key
+    assert settings.effective_session_payload_keys == (settings.secret_key,)
+    assert settings.session_namespace == "template-test"
+    assert settings.session_allowed_keys == ("cart_id", "locale")
+    assert settings.session_absolute_timeout_seconds == 28_800
     assert settings.graph_max_response_bytes == 131072
     assert settings.graph_max_retries == 1
     assert settings.proxy_hops.any_enabled is True
@@ -87,6 +100,9 @@ def test_loads_normalizes_and_exports_secure_configuration() -> None:
     config = settings.flask_config()
     assert config["DEBUG"] is False
     assert config["SESSION_SIGNING_KEYS"] == (settings.secret_key,)
+    assert config["SESSION_PAYLOAD_KEYS"] == (settings.secret_key,)
+    assert config["SESSION_NAMESPACE"] == "template-test"
+    assert config["MS_ENTRA_SESSION_NAMESPACE"] == "template-test"
     assert config["WTF_CSRF_SECRET_KEY"] == settings.secret_key
     assert config["MS_ENTRA_REQUIRE_ATOMIC_STORAGE"] is True
     assert config["MAX_CONTENT_LENGTH"] == 1024 * 1024
@@ -97,7 +113,7 @@ def test_production_requires_independent_cryptographic_material() -> None:
     assert settings.session_signing_keys == (cryptographic_key(20), cryptographic_key(30))
     assert settings.flask_config()["SESSION_COOKIE_NAME"] == "__Host-msentra_session"
 
-    for missing in ("SESSION_SIGNING_KEYS", "WTF_CSRF_SECRET_KEY"):
+    for missing in ("SESSION_SIGNING_KEYS", "SESSION_PAYLOAD_KEYS", "WTF_CSRF_SECRET_KEY"):
         env = production_env()
         env.pop(missing)
         with pytest.raises(SettingsError, match=missing):
@@ -127,6 +143,7 @@ def test_secret_sources_support_absolute_utf8_mounts(tmp_path: Path) -> None:
     settings = AppSettings.from_env(env)
     assert settings.secret_key == cryptographic_key(50)
     assert settings.session_signing_keys == (cryptographic_key(60), cryptographic_key(70))
+    assert settings.session_payload_keys == (cryptographic_key(61), cryptographic_key(71))
     assert settings.redis_url.startswith("rediss://")
 
 
@@ -212,6 +229,12 @@ def test_rejects_invalid_environment_values_and_bounds() -> None:
         ("GRAPH_MAX_RETRIES", "4", "exceed"),
         ("GRAPH_MAX_RETRY_AFTER_SECONDS", "121", "exceed"),
         ("SESSION_COOKIE_SAMESITE", "wild", "SAMESITE"),
+        ("SESSION_ABSOLUTE_TIMEOUT_SECONDS", "604801", "exceed"),
+        ("SESSION_SID_RENEWAL_SECONDS", "86401", "exceed"),
+        ("SESSION_CLOCK_SKEW_SECONDS", "301", "exceed"),
+        ("SESSION_ACTIVITY_UPDATE_SECONDS", "86401", "exceed"),
+        ("SESSION_SCHEMA_STRICT", "maybe", "boolean"),
+        ("SESSION_NAMESPACE", "bad namespace", "unsupported"),
     )
     for name, value, message in cases:
         env = valid_env()
@@ -323,6 +346,12 @@ def test_directly_constructed_settings_receive_the_same_validation(settings: App
         ({"debug": "false"}, "DEBUG"),
         ({"secret_key": "short"}, "APP_SECRET_KEY"),
         ({"session_signing_keys": "key"}, "ordered key ring"),
+        ({"session_payload_keys": "key"}, "ordered key ring"),
+        ({"session_namespace": "bad namespace"}, "unsupported"),
+        ({"session_absolute_timeout_seconds": 100}, "shorter"),
+        ({"session_sid_renewal_seconds": 28_800}, "shorter"),
+        ({"session_activity_update_seconds": 3601}, "idle"),
+        ({"session_schema_strict": "true"}, "boolean"),
         ({"session_signing_keys": tuple(cryptographic_key(i) for i in range(6))}, "5"),
         ({"csrf_secret_key": 1}, "WTF_CSRF_SECRET_KEY"),
         ({"trusted_hosts": ".example.test"}, "APP_TRUSTED_HOSTS"),
@@ -512,6 +541,12 @@ def test_remaining_security_parser_edges(settings: AppSettings) -> None:
         replace(production, session_signing_keys=()).validate()
     with pytest.raises(SettingsError, match="WTF_CSRF_SECRET_KEY"):
         replace(production, csrf_secret_key="").validate()
+    with pytest.raises(SettingsError, match="SESSION_PAYLOAD_KEYS"):
+        replace(production, session_payload_keys=()).validate()
+    with pytest.raises(SettingsError, match="unique"):
+        replace(production, session_namespace="msentra-template").validate()
+    with pytest.raises(SettingsError, match="SESSION_SCHEMA_STRICT"):
+        replace(production, session_schema_strict=False).validate()
 
     invalid_base64_length = production_env()
     invalid_base64_length["APP_SECRET_KEY"] = "A" * 33
@@ -539,6 +574,28 @@ def test_remaining_security_parser_edges(settings: AppSettings) -> None:
         settings_module._canonical_hostname("", "TEST_HOST")
     with pytest.raises(SettingsError, match="invalid host"):
         settings_module._canonical_hostname("\ud800.example", "TEST_HOST")
+
+
+
+def test_redis_private_ca_is_validated_and_forwarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ca_file = tmp_path / "redis-ca.pem"
+    ca_file.write_text("test-ca", encoding="utf-8")
+    env = production_env()
+    env["REDIS_CA_CERTS_FILE"] = str(ca_file)
+    settings = AppSettings.from_env(env)
+    captured: dict[str, object] = {}
+
+    def fake_from_url(url: str, **kwargs: object) -> object:
+        captured.update(url=url, **kwargs)
+        return object()
+
+    monkeypatch.setattr("msentraauth_template.settings.Redis.from_url", fake_from_url)
+    settings.create_redis_client()
+    assert captured["ssl_ca_certs"] == str(ca_file)
+
+    env["REDIS_CA_CERTS_FILE"] = "relative.pem"
+    with pytest.raises(SettingsError, match="absolute"):
+        AppSettings.from_env(env)
 
 
 def test_internal_normalization_completion_and_host_deduplication() -> None:

@@ -74,3 +74,24 @@ def test_rejects_false_save_and_invalid_return(redis_double: RedisDouble) -> Non
     redis_double.return_invalid = True
     with pytest.raises(StorageError, match="invalid"):
         storage.load("key")
+
+
+def test_namespace_is_applied_to_all_operations(redis_double: RedisDouble) -> None:
+    storage = RedisAuthStorage(redis_double, key_prefix="app:prod:auth:")
+    assert storage.key_prefix == "app:prod:auth:"
+    storage.save("identity:abc", b"value", ttl=30)
+    assert redis_double.get("app:prod:auth:identity:abc") == b"value"
+    assert storage.take("identity:abc") == b"value"
+
+
+@pytest.mark.parametrize("prefix", ["", "missing-colon", "bad space:", "x" * 129 + ":"])
+def test_rejects_invalid_namespace(redis_double: RedisDouble, prefix: str) -> None:
+    with pytest.raises(ValueError, match="key_prefix"):
+        RedisAuthStorage(redis_double, key_prefix=prefix)
+
+
+@pytest.mark.parametrize("key", ["", "../escape", "bad key", "x" * 257])
+def test_rejects_invalid_external_keys(redis_double: RedisDouble, key: str) -> None:
+    storage = RedisAuthStorage(redis_double)
+    with pytest.raises(StorageError, match="key"):
+        storage.load(key)

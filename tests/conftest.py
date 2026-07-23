@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Iterator, Mapping, Sequence
 from fnmatch import fnmatch
+from threading import RLock
 from time import monotonic
 from typing import Any, cast
 
@@ -27,6 +28,7 @@ class RedisDouble:
         self.return_false = False
         self.forced_get: object | None = None
         self.ping_result: object = True
+        self._lock = RLock()
 
     def _purge_if_expired(self, name: str) -> None:
         expires_at = self._expires_at.get(name)
@@ -83,15 +85,54 @@ class RedisDouble:
             self._expires_at.pop(name, None)
         return removed
 
-    def eval(self, script: str, numkeys: int, *keys_and_args: str) -> object:
-        del script, numkeys
+    def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:
         if self.fail == "eval":
             raise RuntimeError("redis-secret")
-        key = keys_and_args[0]
-        value = self.get(key)
-        if value is not None:
-            self.delete(key)
-        return value
+        with self._lock:
+            keys = tuple(str(value) for value in keys_and_args[:numkeys])
+            args = keys_and_args[numkeys:]
+            if "9223372036854775806" in script:
+                key = keys[0]
+                raw = self._values.get(key)
+                try:
+                    current = 0 if raw is None else int(raw.decode("ascii"))
+                except (UnicodeError, ValueError):
+                    return -1
+                if current < 0 or current >= 2**63 - 2:
+                    return -1
+                current += 1
+                self._values[key] = str(current).encode("ascii")
+                self._expires_at.pop(key, None)
+                return current
+            if numkeys == 2 and "EXISTS" in script:
+                old_key, new_key = keys
+                current = self._values.get(old_key)
+                expected, new_value, ttl_raw = args
+                if current is None:
+                    return 0
+                if current != expected:
+                    return -2
+                if new_key in self._values:
+                    return -1
+                self._values[new_key] = bytes(new_value)  # type: ignore[arg-type]
+                self._expires_at[new_key] = monotonic() + int(str(ttl_raw))
+                self._values.pop(old_key, None)
+                self._expires_at.pop(old_key, None)
+                return 1
+            key = keys[0]
+            current = self._values.get(key)
+            if "current ~= ARGV[1]" in script:
+                if current is None:
+                    return 1
+                if not args or current != args[0]:
+                    return 0
+                self._values.pop(key, None)
+                self._expires_at.pop(key, None)
+                return 1
+            if current is not None:
+                self._values.pop(key, None)
+                self._expires_at.pop(key, None)
+            return current
 
     def ping(self) -> object:
         if self.fail == "ping":
@@ -264,6 +305,15 @@ def settings() -> AppSettings:
         graph_max_response_bytes=64 * 1024,
         graph_max_retries=2,
         graph_max_retry_after_seconds=30,
+        session_payload_keys=(cryptographic_key(5), cryptographic_key(6)),
+        session_namespace="msentra-template-test",
+        session_absolute_timeout_seconds=28_800,
+        session_sid_renewal_seconds=900,
+        session_clock_skew_seconds=30,
+        session_activity_update_seconds=60,
+        session_allowed_keys=("value",),
+        session_schema_strict=True,
+        redis_ca_certs_file="",
     )
 
 

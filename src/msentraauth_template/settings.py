@@ -16,6 +16,8 @@ from uuid import UUID
 
 from redis import Redis
 
+from .session_envelope import SessionEnvelopeCodec
+
 _PLACEHOLDER_VALUES: Final = frozenset(
     {"change-me", "changeme", "replace", "replace-me", "substitua"}
 )
@@ -55,6 +57,10 @@ _MAX_REDIS_TIMEOUT_SECONDS: Final = 30.0
 _MAX_GRAPH_CONNECT_TIMEOUT_SECONDS: Final = 10.0
 _MAX_GRAPH_READ_TIMEOUT_SECONDS: Final = 30.0
 _MAX_SESSION_LIFETIME_SECONDS: Final = 86_400
+_MAX_SESSION_ABSOLUTE_TIMEOUT_SECONDS: Final = 7 * 86_400
+_MAX_SESSION_CLOCK_SKEW_SECONDS: Final = 300
+_MAX_SESSION_NAMESPACE_CHARACTERS: Final = 64
+_SESSION_NAMESPACE_RE: Final = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 _MAX_REDIS_HEALTH_INTERVAL_SECONDS: Final = 300
 _MAX_GRAPH_RESPONSE_BYTES: Final = 256 * 1024
 _MAX_GRAPH_RETRIES: Final = 3
@@ -128,6 +134,15 @@ class AppSettings:
     graph_max_response_bytes: int = 64 * 1024
     graph_max_retries: int = 2
     graph_max_retry_after_seconds: int = 30
+    session_payload_keys: tuple[str, ...] = ()
+    session_namespace: str = "msentra-template"
+    session_absolute_timeout_seconds: int = 28_800
+    session_sid_renewal_seconds: int = 900
+    session_clock_skew_seconds: int = 30
+    session_activity_update_seconds: int = 60
+    session_allowed_keys: tuple[str, ...] = ()
+    session_schema_strict: bool = True
+    redis_ca_certs_file: str = ""
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> AppSettings:
@@ -156,6 +171,12 @@ class AppSettings:
             minimum=32,
             environment=environment,
             cryptographic=True,
+        )
+        session_payload_keys = _secret_ring_source(
+            values,
+            "SESSION_PAYLOAD_KEYS",
+            minimum=32,
+            environment=environment,
         )
 
         base_url = _base_url(_text(values, "APP_BASE_URL"))
@@ -288,6 +309,40 @@ class AppSettings:
                 30,
                 maximum=_MAX_RETRY_AFTER_SECONDS,
             ),
+            session_payload_keys=session_payload_keys,
+            session_namespace=_session_namespace(
+                _text(values, "SESSION_NAMESPACE", default="msentra-template")
+            ),
+            session_absolute_timeout_seconds=_bounded_positive_int(
+                values,
+                "SESSION_ABSOLUTE_TIMEOUT_SECONDS",
+                28_800,
+                maximum=_MAX_SESSION_ABSOLUTE_TIMEOUT_SECONDS,
+            ),
+            session_sid_renewal_seconds=_bounded_positive_int(
+                values,
+                "SESSION_SID_RENEWAL_SECONDS",
+                900,
+                maximum=_MAX_SESSION_LIFETIME_SECONDS,
+            ),
+            session_clock_skew_seconds=_bounded_non_negative_int(
+                values,
+                "SESSION_CLOCK_SKEW_SECONDS",
+                30,
+                maximum=_MAX_SESSION_CLOCK_SKEW_SECONDS,
+            ),
+            session_activity_update_seconds=_bounded_positive_int(
+                values,
+                "SESSION_ACTIVITY_UPDATE_SECONDS",
+                60,
+                maximum=_MAX_SESSION_LIFETIME_SECONDS,
+            ),
+            session_allowed_keys=_optional_csv(values, "SESSION_ALLOWED_KEYS"),
+            session_schema_strict=_boolean(values, "SESSION_SCHEMA_STRICT", default=True),
+            redis_ca_certs_file=_optional_regular_file_path(
+                values.get("REDIS_CA_CERTS_FILE", ""),
+                "REDIS_CA_CERTS_FILE",
+            ),
         )
         settings.validate()
         return settings
@@ -299,6 +354,35 @@ class AppSettings:
     @property
     def effective_csrf_secret_key(self) -> str:
         return self.csrf_secret_key or self.secret_key
+
+    @property
+    def effective_session_payload_keys(self) -> tuple[str, ...]:
+        return self.session_payload_keys or (self.secret_key,)
+
+    @property
+    def session_key_prefix(self) -> str:
+        return f"{self.session_namespace}:session:"
+
+    @property
+    def auth_storage_key_prefix(self) -> str:
+        return f"{self.session_namespace}:auth:"
+
+    @property
+    def revocation_key_prefix(self) -> str:
+        return f"{self.session_namespace}:revocation:"
+
+    def create_session_codec(self) -> SessionEnvelopeCodec:
+        self.validate()
+        return SessionEnvelopeCodec(
+            self.effective_session_payload_keys,
+            namespace=self.session_namespace,
+            idle_timeout_seconds=self.session_lifetime_seconds,
+            absolute_timeout_seconds=self.session_absolute_timeout_seconds,
+            sid_renewal_seconds=self.session_sid_renewal_seconds,
+            clock_skew_seconds=self.session_clock_skew_seconds,
+            allowed_keys=self.session_allowed_keys,
+            strict_schema=self.session_schema_strict,
+        )
 
     def validate(self) -> None:
         """Revalida invariantes ao receber uma instância construída diretamente."""
@@ -335,6 +419,14 @@ class AppSettings:
             required=environment == "production",
         )
         _require_canonical(self.csrf_secret_key, csrf_secret_key, "WTF_CSRF_SECRET_KEY")
+        session_payload_keys = _validate_secret_ring(
+            self.session_payload_keys,
+            "SESSION_PAYLOAD_KEYS",
+            minimum=32,
+            environment=environment,
+            required=environment == "production",
+        )
+        _require_canonical(self.session_payload_keys, session_payload_keys, "SESSION_PAYLOAD_KEYS")
 
         base_url = _base_url(_required_text_value(self.base_url, "APP_BASE_URL"))
         _require_canonical(self.base_url, base_url, "APP_BASE_URL")
@@ -402,6 +494,47 @@ class AppSettings:
             maximum=_MAX_SESSION_LIFETIME_SECONDS,
         )
         _validate_boolean(self.session_refresh_each_request, "SESSION_REFRESH_EACH_REQUEST")
+        _validate_bounded_positive_int(
+            self.session_absolute_timeout_seconds,
+            "SESSION_ABSOLUTE_TIMEOUT_SECONDS",
+            maximum=_MAX_SESSION_ABSOLUTE_TIMEOUT_SECONDS,
+        )
+        _validate_bounded_positive_int(
+            self.session_sid_renewal_seconds,
+            "SESSION_SID_RENEWAL_SECONDS",
+            maximum=_MAX_SESSION_LIFETIME_SECONDS,
+        )
+        _validate_bounded_non_negative_int(
+            self.session_clock_skew_seconds,
+            "SESSION_CLOCK_SKEW_SECONDS",
+            maximum=_MAX_SESSION_CLOCK_SKEW_SECONDS,
+        )
+        _validate_bounded_positive_int(
+            self.session_activity_update_seconds,
+            "SESSION_ACTIVITY_UPDATE_SECONDS",
+            maximum=_MAX_SESSION_LIFETIME_SECONDS,
+        )
+        if self.session_absolute_timeout_seconds < self.session_lifetime_seconds:
+            raise SettingsError(
+                "SESSION_ABSOLUTE_TIMEOUT_SECONDS cannot be shorter than "
+                "SESSION_LIFETIME_SECONDS"
+            )
+        if self.session_sid_renewal_seconds >= self.session_absolute_timeout_seconds:
+            raise SettingsError(
+                "SESSION_SID_RENEWAL_SECONDS must be shorter than the absolute timeout"
+            )
+        if self.session_activity_update_seconds > self.session_lifetime_seconds:
+            raise SettingsError("SESSION_ACTIVITY_UPDATE_SECONDS cannot exceed the idle timeout")
+        namespace = _session_namespace(self.session_namespace)
+        _require_canonical(self.session_namespace, namespace, "SESSION_NAMESPACE")
+        allowed_keys = _validate_optional_string_values(
+            self.session_allowed_keys,
+            "SESSION_ALLOWED_KEYS",
+        )
+        _require_canonical(self.session_allowed_keys, allowed_keys, "SESSION_ALLOWED_KEYS")
+        _validate_boolean(self.session_schema_strict, "SESSION_SCHEMA_STRICT")
+        ca_file = _optional_regular_file_path(self.redis_ca_certs_file, "REDIS_CA_CERTS_FILE")
+        _require_canonical(self.redis_ca_certs_file, ca_file, "REDIS_CA_CERTS_FILE")
         _validate_boolean(self.cookie_secure, "SESSION_COOKIE_SECURE")
         cookie_samesite = _samesite(
             _required_text_value(self.cookie_samesite, "SESSION_COOKIE_SAMESITE")
@@ -454,6 +587,10 @@ class AppSettings:
             session_signing_keys=self.effective_session_signing_keys,
             csrf_secret_key=self.effective_csrf_secret_key,
             client_secret=client_secret,
+            session_payload_keys=self.effective_session_payload_keys,
+            session_namespace=self.session_namespace,
+            session_schema_strict=self.session_schema_strict,
+            redis_ca_certs_file=self.redis_ca_certs_file,
         )
 
     def create_redis_client(self) -> Redis:
@@ -469,6 +606,8 @@ class AppSettings:
                 ssl_cert_reqs="required",
                 ssl_check_hostname=True,
             )
+            if self.redis_ca_certs_file:
+                connection_options["ssl_ca_certs"] = self.redis_ca_certs_file
         return Redis.from_url(self.redis_url, **connection_options)
 
     def flask_config(self) -> dict[str, object]:
@@ -480,6 +619,15 @@ class AppSettings:
             "DEBUG": self.debug,
             "SECRET_KEY": self.secret_key,
             "SESSION_SIGNING_KEYS": self.effective_session_signing_keys,
+            "SESSION_PAYLOAD_KEYS": self.effective_session_payload_keys,
+            "SESSION_NAMESPACE": self.session_namespace,
+            "SESSION_IDLE_TIMEOUT_SECONDS": self.session_lifetime_seconds,
+            "SESSION_ABSOLUTE_TIMEOUT_SECONDS": self.session_absolute_timeout_seconds,
+            "SESSION_SID_RENEWAL_SECONDS": self.session_sid_renewal_seconds,
+            "SESSION_CLOCK_SKEW_SECONDS": self.session_clock_skew_seconds,
+            "SESSION_ACTIVITY_UPDATE_SECONDS": self.session_activity_update_seconds,
+            "SESSION_ALLOWED_KEYS": self.session_allowed_keys,
+            "SESSION_SCHEMA_STRICT": self.session_schema_strict,
             "WTF_CSRF_SECRET_KEY": self.effective_csrf_secret_key,
             "TRUSTED_HOSTS": list(self.trusted_hosts),
             "PREFERRED_URL_SCHEME": "https" if production else urlsplit(self.base_url).scheme,
@@ -502,7 +650,7 @@ class AppSettings:
             "MS_ENTRA_TENANT_ID": self.tenant_id,
             "MS_ENTRA_REDIRECT_URI": self.redirect_uri,
             "MS_ENTRA_SCOPES": list(self.scopes),
-            "MS_ENTRA_SESSION_NAMESPACE": "msentra-template",
+            "MS_ENTRA_SESSION_NAMESPACE": self.session_namespace,
             "MS_ENTRA_TOKEN_CACHE_TTL": self.session_lifetime_seconds,
             "MS_ENTRA_IDENTITY_TTL": self.session_lifetime_seconds,
             "MS_ENTRA_FLOW_TTL": min(self.session_lifetime_seconds, 600),
@@ -746,6 +894,51 @@ def _csv(values: Mapping[str, str], name: str, default: str) -> tuple[str, ...]:
     if not parts:
         raise SettingsError(f"{name} must contain at least one value")
     return parts
+
+
+def _optional_csv(values: Mapping[str, str], name: str) -> tuple[str, ...]:
+    raw = values.get(name, "").strip()
+    if not raw:
+        return ()
+    return _validate_optional_string_values(
+        tuple(part.strip() for part in raw.split(",") if part.strip()),
+        name,
+    )
+
+
+def _validate_optional_string_values(values: object, name: str) -> tuple[str, ...]:
+    if not isinstance(values, (tuple, list)):
+        raise SettingsError(f"{name} must be a list of values")
+    normalized = tuple(dict.fromkeys(_required_text_value(value, name) for value in values))
+    return normalized
+
+
+def _session_namespace(value: str) -> str:
+    normalized = _required_text_value(value, "SESSION_NAMESPACE")
+    if (
+        len(normalized) > _MAX_SESSION_NAMESPACE_CHARACTERS
+        or not _SESSION_NAMESPACE_RE.fullmatch(normalized)
+    ):
+        raise SettingsError("SESSION_NAMESPACE contains unsupported characters")
+    return normalized
+
+
+def _optional_regular_file_path(value: object, name: str) -> str:
+    if value == "":
+        return ""
+    if not isinstance(value, str) or not value.strip():
+        raise SettingsError(f"{name} must be an absolute regular file path")
+    normalized = value.strip()
+    path = Path(normalized)
+    if not path.is_absolute():
+        raise SettingsError(f"{name} must be an absolute path")
+    try:
+        metadata = path.stat()
+    except OSError as exc:
+        raise SettingsError(f"{name} could not be read") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SettingsError(f"{name} must reference a regular file")
+    return normalized
 
 
 def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
@@ -1101,6 +1294,10 @@ def _validate_environment_security(
     session_signing_keys: tuple[str, ...],
     csrf_secret_key: str,
     client_secret: str,
+    session_payload_keys: tuple[str, ...],
+    session_namespace: str,
+    session_schema_strict: bool,
+    redis_ca_certs_file: str,
 ) -> None:
     base = urlsplit(base_url)
     redirect = urlsplit(redirect_uri)
@@ -1128,9 +1325,23 @@ def _validate_environment_security(
             raise SettingsError("DEBUG must be false in production")
         if not csrf_enabled:
             raise SettingsError("WTF_CSRF_ENABLED must be true in production")
-        independent = (secret_key, csrf_secret_key, client_secret, *session_signing_keys)
+        independent = (
+            secret_key,
+            csrf_secret_key,
+            client_secret,
+            *session_signing_keys,
+            *session_payload_keys,
+        )
         if len(set(independent)) != len(independent):
             raise SettingsError("production secrets must use independent values")
+        if session_namespace == "msentra-template":
+            raise SettingsError(
+                "SESSION_NAMESPACE must be unique per application and environment in production"
+            )
+        if not session_schema_strict:
+            raise SettingsError("SESSION_SCHEMA_STRICT must be true in production")
+        if redis_tls_required and redis_ca_certs_file and not Path(redis_ca_certs_file).is_file():
+            raise SettingsError("REDIS_CA_CERTS_FILE must reference a readable regular file")
 
 
 def _render_host_for_trust(parsed: SplitResult) -> str:
