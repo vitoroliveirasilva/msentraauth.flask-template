@@ -37,3 +37,17 @@
 ## Limites
 
 O registro local em memória é demonstrativo, autorização de negócio não está incluída e a configuração real de Entra ID, Redis, proxy, secrets, monitoramento e deploy permanece responsabilidade do consumidor.
+
+## Programa de hardening de segurança
+
+A fundação documental `SEC-00` foi implementada sobre a branch `dev` no SHA
+`f2d20385ff180f016d12622c76554a3838532b74`. Seu estado permanece `PARCIAL` até o gate oficial ser executado em checkout local. O programa técnico `SEC-01` a `SEC-06` permanece aberto.
+
+Consulte:
+
+- [baseline e divergências;](../seguranca/00_BASELINE_E_ESCOPO.md)
+- [matriz de 156 controles;](../seguranca/02_MATRIZ_DE_RISCOS_E_CONTROLES.md)
+- [status rastreável.](../seguranca/07_STATUS.md)
+
+A conclusão do plano funcional em `docs/13_PLANO_MESTRE.md` não implica conclusão do programa
+de hardening.

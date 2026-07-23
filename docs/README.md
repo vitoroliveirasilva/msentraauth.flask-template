@@ -21,3 +21,12 @@
 17. [Referências.](17_REFERENCIAS.md)
 
 Consulte também os [ADRs](decisoes/README.md) e o [status](implementation/status.md).
+
+## Programa de hardening
+
+O plano funcional acima permanece concluído e não deve ser confundido com o programa de
+segurança `SEC-00` a `SEC-06`.
+
+- [Índice do programa de hardening;](seguranca/README.md)
+- [Matriz de riscos e controles;](seguranca/02_MATRIZ_DE_RISCOS_E_CONTROLES.md)
+- [Status rastreável.](seguranca/07_STATUS.md)
