@@ -2,52 +2,50 @@
 
 ## App Registration
 
-1. Acessar o Microsoft Entra admin center;
-2. Criar registro de aplicação;
-3. Escolher single-tenant inicialmente;
-4. Adicionar plataforma Web;
-5. Registrar redirect URI local e de produção;
-6. Adicionar permissão delegada `User.Read`;
-7. Criar client secret ou certificado;
-8. Guardar a credencial em secret manager.
+1. Crie uma aplicação **single-tenant**;
+2. Adicione a plataforma Web;
+3. Cadastre a redirect URI exata de cada ambiente;
+4. Conceda somente a permissão delegada `User.Read`;
+5. Armazene a credencial em secret manager e exponha-a por secret mount;
+6. Planeje a rotação antes da expiração.
 
-## URIs de referência
+A versão `1.0.0` de `flask-ms-entra-auth` aceita client secret. Certificado e workload
+identity permanecem evolução da extensão e não são simulados pelo template.
 
-Desenvolvimento:
+## Identificadores
+
+Em produção, `MS_ENTRA_CLIENT_ID` deve ser UUID. `MS_ENTRA_TENANT_ID` deve ser o UUID do tenant
+ou um domínio verificado específico. Os aliases `common`, `organizations` e `consumers` são
+rejeitados para preservar o contrato single-tenant.
+
+## Redirect URI
+
+Referências:
 
 ```text
 http://localhost:5000/auth/callback
+https://app.example.com/auth/callback
 ```
 
-Produção:
+A URI deve:
 
-```text
-https://seu-dominio/auth/callback
-```
+- usar a mesma origem de `APP_BASE_URL`;
+- possuir caminho estático, não-raiz e sem barra final;
+- não conter query, fragmento, credenciais, controles ou separadores codificados;
+- ter no máximo 256 caracteres;
+- corresponder exatamente ao App Registration.
 
-A URI enviada deve corresponder ao registro, ter no máximo 256 caracteres e não usar wildcard, domínio internacionalizado, caracteres de controle ou os caracteres especiais rejeitados pelo Microsoft Entra. Como o projeto é single-tenant, uma query string fixa é aceita quando também estiver cadastrada exatamente no App Registration.
-
-A rota `/logged-out` é apenas a confirmação do logout local da aplicação. Ela não deve ser cadastrada como redirect URI de autenticação e não encerra outras sessões Microsoft. Uma Front-channel logout URL, caso adotada futuramente, é uma configuração separada.
-
-### App Registration existente com outro callback
-
-Quando o App Registration não puder ser alterado e já usar outro caminho na mesma origem, configure a URI exata em `MS_ENTRA_REDIRECT_URI`. Exemplo:
-
-```dotenv
-MS_ENTRA_REDIRECT_URI=http://localhost:5000/getAToken
-```
-
-O template decodifica e registra esse caminho como alias direto da função de callback da extensão. Não há redirecionamento intermediário, e os parâmetros `code` e `state` continuam sendo validados pela extensão. O caminho não pode ser a raiz da aplicação nem colidir com outra rota `GET`.
+Callbacks legados, como `/getAToken`, continuam suportados quando obedecem ao mesmo contrato.
+`/logged-out` é confirmação de logout local e não é redirect URI do App Registration.
 
 ## Credencial
 
-- Nunca em Git;
-- Nunca no frontend;
-- Nunca em logs;
-- Rotação antes da expiração;
-- Acesso pelo menor número de identidades;
-- Certificado é evolução desejável.
+Use `MS_ENTRA_CLIENT_SECRET_FILE=/run/secrets/...` em produção. `MS_ENTRA_CLIENT_SECRET` e a
+variante `_FILE` são mutuamente exclusivas. O valor nunca deve aparecer em Git, imagem, logs,
+artefatos ou argumentos de processo.
 
-## Single-tenant
+## CAE e claims challenge
 
-É o modo inicial. Multi-tenant exige validação de issuer, allowlist, consentimento e modelo de autorização próprio.
+O cliente Graph detecta e valida um claims challenge sem registrar as claims. O template retorna
+`401` sem redirecionamento automático, evitando loop. A repetição segura da autenticação com
+`claims` depende de suporte explícito da extensão e permanece `BLOQUEADO_EXTENSAO`.

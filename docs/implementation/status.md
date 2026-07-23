@@ -40,17 +40,19 @@ O registro local em memória é demonstrativo, autorização de negócio não es
 
 ## Programa de hardening de segurança
 
-A fundação documental `SEC-00` foi incorporada à branch `dev`. A `SEC-01` foi implementada sobre
-o SHA `18ee71ca8c7dbddd2fce06738c9ff974306a0861`, com Actions e imagens por digest, permissões
-mínimas, constraints diretas, build único, checksums, SBOM, attestations, scanner e Compose
-endurecido. Seu estado permanece `PARCIAL` até o gate oficial ser executado em checkout completo e
-os locks transitivos com hashes serem gerados e aprovados. `SEC-02` a `SEC-06` permanecem abertos.
+A fundação documental `SEC-00` foi incorporada à branch `dev`. A `SEC-01` endureceu supply chain
+e permanece parcial pelos gates e locks ainda pendentes. A `SEC-02` foi implementada sobre o SHA
+`5e4d24f3522b6105da3538948db8f21bbbb1c675`, com segredos por finalidade, key ring do SID,
+secret mounts, validações fail-fast e transporte Microsoft Graph restrito. A etapa permanece
+`PARCIAL` até a suíte integral ser executada e os controles dependentes da extensão ou da
+infraestrutura receberem evidência real. `SEC-03` a `SEC-06` permanecem abertas.
 
 Consulte:
 
 - [baseline e divergências;](../seguranca/00_BASELINE_E_ESCOPO.md)
 - [matriz de 156 controles;](../seguranca/02_MATRIZ_DE_RISCOS_E_CONTROLES.md)
-- [status rastreável.](../seguranca/07_STATUS.md)
+- [status rastreável;](../seguranca/07_STATUS.md)
+- [configuração, Entra e Graph.](../seguranca/09_CONFIGURACAO_ENTRA_GRAPH.md)
 
 A conclusão do plano funcional em `docs/13_PLANO_MESTRE.md` não implica conclusão do programa
 de hardening.

@@ -16,6 +16,7 @@ from .storage import RedisClient
 
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 _MAX_SESSION_BYTES = 64 * 1024
+_MAX_SIGNING_KEYS = 5
 _STATELESS_PATHS = frozenset({"/health/live", "/health/ready"})
 
 
@@ -39,6 +40,7 @@ class RedisSession(CallbackDict[str, object], SessionMixin):
         discard_cookie: bool = False,
         backend_available: bool = True,
         stateless: bool = False,
+        resign_cookie: bool = False,
     ) -> None:
         def on_update(_: object) -> None:
             self.modified = True
@@ -51,6 +53,7 @@ class RedisSession(CallbackDict[str, object], SessionMixin):
         self.discard_cookie = discard_cookie
         self.backend_available = backend_available
         self.stateless = stateless
+        self.resign_cookie = resign_cookie
 
     def __getitem__(self, key: str) -> Any:
         self.accessed = True
@@ -89,9 +92,10 @@ class RedisSessionInterface(SessionInterface):
             return self._fresh_session(app, stateless=True)
 
         signed_sid = request.cookies.get(self.get_cookie_name(app))
-        sid = self._unsign_sid(app, signed_sid) if signed_sid else None
-        if sid is None:
+        resolved_sid = self._unsign_sid(app, signed_sid) if signed_sid else None
+        if resolved_sid is None:
             return self._fresh_session(app, discard_cookie=signed_sid is not None)
+        sid, resign_cookie = resolved_sid
         try:
             payload = self._client.get(self._key(sid))
         except Exception:
@@ -116,7 +120,12 @@ class RedisSessionInterface(SessionInterface):
         if not isinstance(decoded, dict):
             app.logger.warning("server-side session payload had an invalid structure")
             return self._fresh_session(app, discard_cookie=True)
-        return self.session_class(decoded, sid=sid, new=False)
+        return self.session_class(
+            decoded,
+            sid=sid,
+            new=False,
+            resign_cookie=resign_cookie,
+        )
 
     def save_session(self, app: Flask, session: SessionMixin, response: Response) -> None:
         if not isinstance(session, RedisSession):
@@ -150,7 +159,7 @@ class RedisSessionInterface(SessionInterface):
         if app.config.get("SESSION_PERMANENT", False) and not session.permanent:
             session.permanent = True
 
-        if not self.should_set_cookie(app, session):
+        if not (self.should_set_cookie(app, session) or session.resign_cookie):
             if session.discard_cookie:
                 self._delete_cookie(app, response, cookie_name)
             return
@@ -197,6 +206,7 @@ class RedisSessionInterface(SessionInterface):
 
         session.new = False
         session.discard_cookie = False
+        session.resign_cookie = False
         response.set_cookie(
             cookie_name,
             self._sign_sid(app, session.sid),
@@ -222,6 +232,7 @@ class RedisSessionInterface(SessionInterface):
         session.sid = self._new_sid()
         session.new = True
         session.modified = True
+        session.resign_cookie = False
 
     def _delete_cookie(self, app: Flask, response: Response, cookie_name: str) -> None:
         response.delete_cookie(
@@ -306,24 +317,48 @@ class RedisSessionInterface(SessionInterface):
     def _new_sid(self) -> str:
         return token_urlsafe(32)
 
-    def _signer(self, app: Flask) -> Signer:
-        if not app.secret_key:
-            raise RuntimeError("SECRET_KEY is required for server-side sessions")
-        return Signer(
-            app.secret_key,
-            salt="msentra-template-session",
-            digest_method=sha256,
+    def _signers(self, app: Flask) -> tuple[Signer, ...]:
+        configured = app.config.get("SESSION_SIGNING_KEYS")
+        if configured is None:
+            configured = (app.secret_key,) if app.secret_key else ()
+        if isinstance(configured, str):
+            keys: tuple[object, ...] = (configured,)
+        elif isinstance(configured, (tuple, list)):
+            keys = tuple(configured)
+        else:
+            keys = ()
+        if not keys:
+            raise RuntimeError("SECRET_KEY or SESSION_SIGNING_KEYS is required for sessions")
+        if len(keys) > _MAX_SIGNING_KEYS:
+            raise RuntimeError("SESSION_SIGNING_KEYS must contain at most five keys")
+        if any(not isinstance(key, (str, bytes)) or not key for key in keys):
+            raise RuntimeError("SESSION_SIGNING_KEYS contains an invalid key")
+        return tuple(
+            Signer(
+                key,
+                salt="msentra-template-session",
+                digest_method=sha256,
+            )
+            for key in keys
         )
+
+    def _signer(self, app: Flask) -> Signer:
+        """Retorna o signer ativo, preservando o helper interno da versão 1.0.x"""
+        return self._signers(app)[0]
 
     def _sign_sid(self, app: Flask, sid: str) -> str:
         return self._signer(app).sign(sid.encode()).decode()
 
-    def _unsign_sid(self, app: Flask, signed_sid: str) -> str | None:
-        try:
-            sid = self._signer(app).unsign(signed_sid.encode()).decode()
-        except (BadSignature, UnicodeError):
+    def _unsign_sid(self, app: Flask, signed_sid: str) -> tuple[str, bool] | None:
+        for index, signer in enumerate(self._signers(app)):
+            try:
+                sid = signer.unsign(signed_sid.encode()).decode()
+            except (BadSignature, UnicodeError):
+                continue
+            if _SID_RE.fullmatch(sid):
+                return sid, index > 0
             return None
-        return sid if _SID_RE.fullmatch(sid) else None
+        return None
 
 
 def register_session_backend_guard(app: Flask) -> None:

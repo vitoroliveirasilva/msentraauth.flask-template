@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Iterator, Mapping, Sequence
 from fnmatch import fnmatch
 from time import monotonic
@@ -10,6 +11,11 @@ from flask_ms_entra_auth.auth.protocols import MsalAccount, MsalResult
 from msal import SerializableTokenCache  # type: ignore[import-untyped]
 
 from msentraauth_template.settings import AppSettings, ProxyHops
+
+
+def cryptographic_key(seed: int) -> str:
+    material = bytes((seed + index) % 256 for index in range(32))
+    return base64.urlsafe_b64encode(material).decode("ascii").rstrip("=")
 
 
 class RedisDouble:
@@ -137,7 +143,10 @@ class FakeMsalClient:
         assert scopes == ["User.Read"]
         assert redirect_uri.endswith("/auth/callback")
         return {
-            "auth_uri": f"https://login.microsoftonline.com/tenant-id/oauth2/v2.0/authorize?state={state}",
+            "auth_uri": (
+                "https://login.microsoftonline.com/tenant-id/oauth2/v2.0/authorize"
+                f"?state={state}"
+            ),
             "state": state,
             "nonce": "nonce",
         }
@@ -175,9 +184,16 @@ class FakeMsalClient:
 
 
 class GraphResponse:
-    def __init__(self, status_code: int, payload: object) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        payload: object,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
         self.payload = payload
+        self.headers = dict(headers or {})
 
     def json(self) -> object:
         if isinstance(self.payload, Exception):
@@ -217,13 +233,13 @@ class GraphTransportDouble:
 def settings() -> AppSettings:
     return AppSettings(
         environment="testing",
-        secret_key="s" * 32,
+        secret_key=cryptographic_key(1),
         base_url="http://localhost:5000",
         trusted_hosts=("localhost",),
         log_level="INFO",
         log_format="text",
         client_id="client-id",
-        client_secret="c" * 32,
+        client_secret="testing-client-secret-with-enough-diversity-123",
         tenant_id="tenant-id",
         redirect_uri="http://localhost:5000/auth/callback",
         scopes=("User.Read",),
@@ -242,6 +258,12 @@ def settings() -> AppSettings:
         proxy_hops=ProxyHops(),
         testing=True,
         csrf_enabled=False,
+        debug=False,
+        session_signing_keys=(cryptographic_key(2), cryptographic_key(3)),
+        csrf_secret_key=cryptographic_key(4),
+        graph_max_response_bytes=64 * 1024,
+        graph_max_retries=2,
+        graph_max_retry_after_seconds=30,
     )
 
 

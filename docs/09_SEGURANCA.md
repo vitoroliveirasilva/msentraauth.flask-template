@@ -1,27 +1,32 @@
 # Segurança
 
-- Sessão Redis com SID assinado, payload server-side e limite de 64 KiB;
-- Rotação do SID depois da autenticação para reduzir session fixation;
-- Vínculo local realizado somente após a rotação bem-sucedida do SID;
-- Persistência condicional `NX`/`XX` para impedir que requisições concorrentes recriem SIDs removidos;
-- Descarte de cookies inválidos, expirados ou associados a payload corrompido, inclusive sem refresh por requisição;
-- Preservação do cookie em indisponibilidade transitória do Redis, com bloqueio temporário e resposta `503` nas rotas dependentes de sessão;
-- Sessões anônimas vazias não geram cookie nem chave Redis;
-- Respostas que consultam a sessão incluem `Vary: Cookie`;
-- Storage atômico Redis para transações de uso único;
-- Produção exige HTTPS, cookie secure, Redis TLS, CSRF ativo e `TESTING=false`;
-- Timeouts precisam ser positivos e finitos;
-- CSRF em formulários e logout por POST;
-- CSP, HSTS em HTTPS, anti-frame, nosniff, COOP, CORP e Permissions Policy;
-- Trusted hosts e URLs externas validadas;
-- Alias de callback restrito a caminho estático e seguro;
-- Request ID sanitizado;
-- Logs JSON e texto usam campos permitidos, linha única e somente o tipo de exceção;
-- Logs não incluem tokens, claims, SID, auth code, state ou corpo Graph;
-- Access log do Gunicorn sem query string;
-- Container não-root, filesystem read-only no Compose e `no-new-privileges`;
-- Publicação de imagem vinculada ao commit da tag versionada;
-- Microsoft Graph com escopo e campos mínimos, retentativas limitadas e sem espera externa não delimitada;
-- Limite de corpo e quantidade de partes de formulário.
+## Configuração e identidade
 
-Autenticação não substitui autorização. O hook local demonstra vínculo e rotação de sessão, não papéis ou permissões. O registro em memória é limitado, mas continua sendo apenas uma demonstração e deve ser substituído quando houver persistência de usuários de negócio.
+- Segredos criptográficos separados para Flask, SID e CSRF;
+- key ring de SID com chave ativa e chaves anteriores de verificação;
+- suporte a secret mounts por `_FILE`;
+- produção rejeita segredo fraco, reutilizado, DEBUG, TESTING, HTTP, Redis sem TLS e CSRF desligado;
+- hosts exatos, URL-base origin-only e callback estático sem query;
+- single-tenant explícito;
+- Graph restrito ao endpoint global oficial.
+
+## Microsoft Graph
+
+- bearer enviado somente ao host aprovado;
+- redirects e `trust_env` desabilitados;
+- TLS obrigatório;
+- corpo, DTO, retries e `Retry-After` limitados;
+- 401, 403, 429, 5xx e claims challenge tratados separadamente;
+- claims não são registradas ou refletidas.
+
+## Sessão
+
+A SEC-02 altera somente a chave usada para assinar o SID e sua rotação. O payload Redis continua
+no formato existente. MAC/AEAD do payload, timeout absoluto, revogação global e rotação atômica do
+SID pertencem à SEC-03.
+
+## Limites externos
+
+Secret manager, política de egress, configuração real do tenant, certificado/workload identity e
+suporte completo a CAE exigem evidência externa ou alteração da extensão. Documentação não marca
+esses controles como concluídos.

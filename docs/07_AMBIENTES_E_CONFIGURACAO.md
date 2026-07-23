@@ -1,33 +1,49 @@
 # Ambientes e configuração
 
-- A fonte de referência é `.env.example`;
-- Nenhum valor sensível possui padrão operacional e placeholders causam falha de inicialização;
-- Instâncias de `AppSettings` construídas diretamente passam pelas mesmas invariantes antes de criar o cliente Redis ou configurar o Flask.
+A fonte executável é `.env.example`. Configurações inválidas geram `SettingsError` antes da
+aplicação servir requisições. Instâncias de `AppSettings` construídas diretamente passam pelas
+mesmas invariantes.
 
-## Desenvolvimento
+## Segredos
 
-Loopback HTTP, cookie não-secure e Redis local são permitidos. CSRF pode ser desligado somente em desenvolvimento controlado ou testes automatizados.
+Segredos suportados por arquivo:
+
+- `APP_SECRET_KEY_FILE`;
+- `SESSION_SIGNING_KEYS_FILE`;
+- `WTF_CSRF_SECRET_KEY_FILE`;
+- `MS_ENTRA_CLIENT_SECRET_FILE`;
+- `REDIS_URL_FILE`.
+
+O caminho deve ser absoluto e apontar para arquivo UTF-8 regular de até 16 KiB. A variável direta
+e sua variante `_FILE` não podem coexistir.
+
+Em produção:
+
+- `APP_SECRET_KEY`, `WTF_CSRF_SECRET_KEY` e cada chave de `SESSION_SIGNING_KEYS` devem ser base64
+  URL-safe e codificar pelo menos 32 bytes;
+- todos os segredos devem ser independentes;
+- a primeira chave do ring assina novos cookies e até quatro chaves anteriores verificam cookies
+  durante uma janela controlada de rotação;
+- `DEBUG=false`, `TESTING=false` e `WTF_CSRF_ENABLED=true` são obrigatórios.
+
+Desenvolvimento preserva compatibilidade: ring e chave CSRF vazios usam `APP_SECRET_KEY`.
+
+## URLs e hosts
+
+- `APP_BASE_URL` contém somente a origem, sem path, query, fragmento ou credenciais;
+- `APP_TRUSTED_HOSTS` aceita hosts exatos, sem `*` ou padrões por sufixo;
+- redirect URI usa a mesma origem e um path estático não ambíguo;
+- Redis usa `rediss://` quando TLS é obrigatório;
+- opções Redis controladas pela aplicação não podem ser sobrescritas pela query;
+- `GRAPH_BASE_URL` aceita somente `https://graph.microsoft.com/v1.0` nesta versão.
+
+## Limites
+
+Timeouts, TTLs, retries, tamanho da resposta Graph, health interval e proxy hops possuem limites
+superiores. `NaN`, infinito, zero onde proibido e números excessivos interrompem o startup.
 
 ## Produção
 
-- `APP_BASE_URL` e redirect URI HTTPS na mesma origem, sem controles, backslash ou query no endereço-base;
-- Host da aplicação presente em `APP_TRUSTED_HOSTS`;
-- `SESSION_COOKIE_SECURE=true`;
-- Secret de sessão com pelo menos 32 caracteres aleatórios;
-- Client secret com pelo menos 24 caracteres;
-- `User.Read` em `MS_ENTRA_SCOPES`;
-- `REDIS_TLS_REQUIRED=true` e URI `rediss://`;
-- A query de `REDIS_URL` não pode redefinir `decode_responses`, timeouts, health check ou verificações TLS controladas pela aplicação;
-- `TESTING=false` e `WTF_CSRF_ENABLED=true`;
-- Timeouts positivos e finitos, sem `NaN` ou infinito;
-- Portas válidas e URLs sem fragmentos ou credenciais onde não permitidas;
-- `GRAPH_BASE_URL` HTTPS sem query string, pois o cliente acrescenta o recurso e os parâmetros OData;
-- Redirect URI com no máximo 256 caracteres, sem controles, caracteres não suportados ou domínio internacionalizado;
-- Callback legado com caminho estático, não-raiz e sem sintaxe dinâmica de rota.
-
-`ProxyFix` permanece desativado até que cada hop confiável seja declarado por `PROXY_X_*`. Valores acima de cinco são rejeitados para evitar configuração acidentalmente ampla.
-
-- Configuração inválida gera `SettingsError` antes de servir requisições;
-- Parâmetros numéricos do Gunicorn também falham cedo quando estão fora dos limites operacionais aceitos.
-
-A detecção de placeholders reconhece os valores-modelo e prefixos explícitos usados na documentação, sem rejeitar credenciais ou identificadores legítimos apenas porque contêm palavras como `replace` no meio do valor.
+Além das regras acima, produção exige HTTPS, cookie Secure, Redis TLS, client ID UUID e tenant
+específico. Configuração soberana ou multi-cloud só deve ser habilitada quando a extensão possuir
+contrato de authority/issuer correspondente.

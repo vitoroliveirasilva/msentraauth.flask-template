@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import os
+import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
 from math import isfinite
+from pathlib import Path
 from typing import Final
 from urllib.parse import SplitResult, parse_qsl, unquote, urlsplit
+from uuid import UUID
 
 from redis import Redis
 
@@ -39,8 +45,24 @@ _PLACEHOLDER_PREFIXES: Final = (
 _ENVIRONMENTS: Final = frozenset({"development", "testing", "production"})
 _LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 _LOG_FORMATS: Final = frozenset({"json", "text"})
+_GRAPH_BASE_URLS: Final = frozenset({"https://graph.microsoft.com/v1.0"})
+_SINGLE_TENANT_ALIASES: Final = frozenset({"common", "consumers", "organizations"})
 _MAX_REDIRECT_URI_LENGTH: Final = 256
+_MAX_SECRET_FILE_BYTES: Final = 16 * 1024
+_MAX_SECRET_CHARACTERS: Final = 4096
+_MAX_SESSION_KEYS: Final = 5
+_MAX_REDIS_TIMEOUT_SECONDS: Final = 30.0
+_MAX_GRAPH_CONNECT_TIMEOUT_SECONDS: Final = 10.0
+_MAX_GRAPH_READ_TIMEOUT_SECONDS: Final = 30.0
+_MAX_SESSION_LIFETIME_SECONDS: Final = 86_400
+_MAX_REDIS_HEALTH_INTERVAL_SECONDS: Final = 300
+_MAX_GRAPH_RESPONSE_BYTES: Final = 256 * 1024
+_MAX_GRAPH_RETRIES: Final = 3
+_MAX_RETRY_AFTER_SECONDS: Final = 120
 _UNSUPPORTED_REDIRECT_URI_CHARACTERS: Final = frozenset("!$'(),;<>\\")
+_UNSUPPORTED_ENCODED_SEPARATORS: Final = re.compile(r"%(?:2f|5c|252f|255c)", re.IGNORECASE)
+_BASE64URL_RE: Final = re.compile(r"^[A-Za-z0-9_-]+={0,2}$")
+_HOST_LABEL_RE: Final = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _REDIS_CONTROLLED_QUERY_OPTIONS: Final = frozenset(
     {
         "decode_responses",
@@ -56,7 +78,7 @@ _REDIS_CONTROLLED_QUERY_OPTIONS: Final = frozenset(
 
 
 class SettingsError(ValueError):
-    """É gerado quando a configuração do template está ausente ou insegura"""
+    """É gerado quando a configuração do template está ausente ou insegura."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,20 +122,52 @@ class AppSettings:
     proxy_hops: ProxyHops = ProxyHops()
     testing: bool = False
     csrf_enabled: bool = True
+    debug: bool = False
+    session_signing_keys: tuple[str, ...] = ()
+    csrf_secret_key: str = ""
+    graph_max_response_bytes: int = 64 * 1024
+    graph_max_retries: int = 2
+    graph_max_retry_after_seconds: int = 30
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> AppSettings:
         values = os.environ if environ is None else environ
         environment = _environment(_text(values, "APP_ENV", default="production"))
         testing = _boolean(values, "TESTING", default=environment == "testing")
+        debug = _boolean(values, "DEBUG", default=environment == "development")
         csrf_enabled = _boolean(values, "WTF_CSRF_ENABLED", default=not testing)
-        secret_key = _secret(values, "APP_SECRET_KEY", minimum=32)
+
+        secret_key = _secret_source(
+            values,
+            "APP_SECRET_KEY",
+            minimum=32,
+            environment=environment,
+            cryptographic=True,
+        )
+        session_signing_keys = _secret_ring_source(
+            values,
+            "SESSION_SIGNING_KEYS",
+            minimum=32,
+            environment=environment,
+        )
+        csrf_secret_key = _optional_secret_source(
+            values,
+            "WTF_CSRF_SECRET_KEY",
+            minimum=32,
+            environment=environment,
+            cryptographic=True,
+        )
+
         base_url = _base_url(_text(values, "APP_BASE_URL"))
-        trusted_hosts = _csv(values, "APP_TRUSTED_HOSTS", default="localhost,127.0.0.1")
+        trusted_hosts = _trusted_hosts(
+            _csv(values, "APP_TRUSTED_HOSTS", default="localhost,127.0.0.1")
+        )
         log_level = _log_level(_text(values, "APP_LOG_LEVEL", default="INFO"))
         log_format = _choice(
             _text(
-                values, "APP_LOG_FORMAT", default="json" if environment == "production" else "text"
+                values,
+                "APP_LOG_FORMAT",
+                default="json" if environment == "production" else "text",
             ),
             "APP_LOG_FORMAT",
             _LOG_FORMATS,
@@ -130,56 +184,80 @@ class AppSettings:
             "REDIS_TLS_REQUIRED",
             default=environment == "production",
         )
-        redis_url = _redis_url(_text(values, "REDIS_URL"), tls_required=redis_tls_required)
+        redis_url = _redis_url(
+            _sensitive_text(values, "REDIS_URL"),
+            tls_required=redis_tls_required,
+        )
         scopes = _csv(values, "MS_ENTRA_SCOPES", default="User.Read")
         if "User.Read" not in scopes:
             raise SettingsError("MS_ENTRA_SCOPES must include User.Read for the profile route")
 
-        _validate_environment_security(
-            environment=environment,
-            base_url=base_url,
-            redirect_uri=redirect_uri,
-            trusted_hosts=trusted_hosts,
-            cookie_secure=cookie_secure,
-            cookie_samesite=cookie_samesite,
-            redis_tls_required=redis_tls_required,
-            testing=testing,
-            csrf_enabled=csrf_enabled,
-        )
-
         settings = cls(
             environment=environment,
             secret_key=secret_key,
-            base_url=base_url.rstrip("/"),
+            base_url=base_url,
             trusted_hosts=trusted_hosts,
             log_level=log_level,
             log_format=log_format,
-            client_id=_text(values, "MS_ENTRA_CLIENT_ID"),
-            client_secret=_secret(values, "MS_ENTRA_CLIENT_SECRET", minimum=24),
-            tenant_id=_text(values, "MS_ENTRA_TENANT_ID"),
+            client_id=_client_id(_text(values, "MS_ENTRA_CLIENT_ID"), environment=environment),
+            client_secret=_secret_source(
+                values,
+                "MS_ENTRA_CLIENT_SECRET",
+                minimum=24,
+                environment=environment,
+                cryptographic=False,
+            ),
+            tenant_id=_tenant_id(_text(values, "MS_ENTRA_TENANT_ID")),
             redirect_uri=redirect_uri,
             scopes=scopes,
             redis_url=redis_url,
-            redis_socket_connect_timeout=_positive_float(
-                values, "REDIS_CONNECT_TIMEOUT_SECONDS", 3.0
+            redis_socket_connect_timeout=_bounded_positive_float(
+                values,
+                "REDIS_CONNECT_TIMEOUT_SECONDS",
+                3.0,
+                maximum=_MAX_REDIS_TIMEOUT_SECONDS,
             ),
-            redis_socket_timeout=_positive_float(values, "REDIS_READ_TIMEOUT_SECONDS", 3.0),
-            redis_health_check_interval=_non_negative_int(
-                values, "REDIS_HEALTH_CHECK_INTERVAL_SECONDS", 30
+            redis_socket_timeout=_bounded_positive_float(
+                values,
+                "REDIS_READ_TIMEOUT_SECONDS",
+                3.0,
+                maximum=_MAX_REDIS_TIMEOUT_SECONDS,
+            ),
+            redis_health_check_interval=_bounded_non_negative_int(
+                values,
+                "REDIS_HEALTH_CHECK_INTERVAL_SECONDS",
+                30,
+                maximum=_MAX_REDIS_HEALTH_INTERVAL_SECONDS,
             ),
             redis_tls_required=redis_tls_required,
-            session_lifetime_seconds=_positive_int(values, "SESSION_LIFETIME_SECONDS", 3600),
+            session_lifetime_seconds=_bounded_positive_int(
+                values,
+                "SESSION_LIFETIME_SECONDS",
+                3600,
+                maximum=_MAX_SESSION_LIFETIME_SECONDS,
+            ),
             session_refresh_each_request=_boolean(
-                values, "SESSION_REFRESH_EACH_REQUEST", default=True
+                values,
+                "SESSION_REFRESH_EACH_REQUEST",
+                default=True,
             ),
             cookie_secure=cookie_secure,
             cookie_samesite=cookie_samesite,
-            graph_base_url=_https_url(
-                _text(values, "GRAPH_BASE_URL", default="https://graph.microsoft.com/v1.0"),
-                "GRAPH_BASE_URL",
-            ).rstrip("/"),
-            graph_connect_timeout=_positive_float(values, "GRAPH_CONNECT_TIMEOUT_SECONDS", 3.05),
-            graph_read_timeout=_positive_float(values, "GRAPH_READ_TIMEOUT_SECONDS", 10.0),
+            graph_base_url=_graph_base_url(
+                _text(values, "GRAPH_BASE_URL", default="https://graph.microsoft.com/v1.0")
+            ),
+            graph_connect_timeout=_bounded_positive_float(
+                values,
+                "GRAPH_CONNECT_TIMEOUT_SECONDS",
+                3.05,
+                maximum=_MAX_GRAPH_CONNECT_TIMEOUT_SECONDS,
+            ),
+            graph_read_timeout=_bounded_positive_float(
+                values,
+                "GRAPH_READ_TIMEOUT_SECONDS",
+                10.0,
+                maximum=_MAX_GRAPH_READ_TIMEOUT_SECONDS,
+            ),
             proxy_hops=ProxyHops(
                 x_for=_bounded_non_negative_int(values, "PROXY_X_FOR", 0, maximum=5),
                 x_proto=_bounded_non_negative_int(values, "PROXY_X_PROTO", 0, maximum=5),
@@ -189,21 +267,80 @@ class AppSettings:
             ),
             testing=testing,
             csrf_enabled=csrf_enabled,
+            debug=debug,
+            session_signing_keys=session_signing_keys,
+            csrf_secret_key=csrf_secret_key,
+            graph_max_response_bytes=_bounded_positive_int(
+                values,
+                "GRAPH_MAX_RESPONSE_BYTES",
+                64 * 1024,
+                maximum=_MAX_GRAPH_RESPONSE_BYTES,
+            ),
+            graph_max_retries=_bounded_non_negative_int(
+                values,
+                "GRAPH_MAX_RETRIES",
+                2,
+                maximum=_MAX_GRAPH_RETRIES,
+            ),
+            graph_max_retry_after_seconds=_bounded_positive_int(
+                values,
+                "GRAPH_MAX_RETRY_AFTER_SECONDS",
+                30,
+                maximum=_MAX_RETRY_AFTER_SECONDS,
+            ),
         )
         settings.validate()
         return settings
+
+    @property
+    def effective_session_signing_keys(self) -> tuple[str, ...]:
+        return self.session_signing_keys or (self.secret_key,)
+
+    @property
+    def effective_csrf_secret_key(self) -> str:
+        return self.csrf_secret_key or self.secret_key
 
     def validate(self) -> None:
         """Revalida invariantes ao receber uma instância construída diretamente."""
 
         environment = _environment(_required_text_value(self.environment, "APP_ENV"))
         _require_canonical(self.environment, environment, "APP_ENV")
-        secret_key = _validate_secret_value(self.secret_key, "APP_SECRET_KEY", minimum=32)
+        _validate_boolean(self.testing, "TESTING")
+        _validate_boolean(self.debug, "DEBUG")
+        _validate_boolean(self.csrf_enabled, "WTF_CSRF_ENABLED")
+
+        secret_key = _validate_secret_value(
+            self.secret_key,
+            "APP_SECRET_KEY",
+            minimum=32,
+            environment=environment,
+            cryptographic=True,
+        )
         _require_canonical(self.secret_key, secret_key, "APP_SECRET_KEY")
+
+        session_signing_keys = _validate_secret_ring(
+            self.session_signing_keys,
+            "SESSION_SIGNING_KEYS",
+            minimum=32,
+            environment=environment,
+            required=environment == "production",
+        )
+        _require_canonical(self.session_signing_keys, session_signing_keys, "SESSION_SIGNING_KEYS")
+        csrf_secret_key = _validate_optional_secret_value(
+            self.csrf_secret_key,
+            "WTF_CSRF_SECRET_KEY",
+            minimum=32,
+            environment=environment,
+            cryptographic=True,
+            required=environment == "production",
+        )
+        _require_canonical(self.csrf_secret_key, csrf_secret_key, "WTF_CSRF_SECRET_KEY")
+
         base_url = _base_url(_required_text_value(self.base_url, "APP_BASE_URL"))
-        base_url = base_url.rstrip("/")
         _require_canonical(self.base_url, base_url, "APP_BASE_URL")
-        trusted_hosts = _validate_string_values(self.trusted_hosts, "APP_TRUSTED_HOSTS")
+        trusted_hosts = _trusted_hosts(
+            _validate_string_values(self.trusted_hosts, "APP_TRUSTED_HOSTS")
+        )
         _require_canonical(self.trusted_hosts, trusted_hosts, "APP_TRUSTED_HOSTS")
         log_level = _log_level(_required_text_value(self.log_level, "APP_LOG_LEVEL"))
         _require_canonical(self.log_level, log_level, "APP_LOG_LEVEL")
@@ -213,13 +350,21 @@ class AppSettings:
             _LOG_FORMATS,
         )
         _require_canonical(self.log_format, log_format, "APP_LOG_FORMAT")
-        client_id = _required_text_value(self.client_id, "MS_ENTRA_CLIENT_ID")
+
+        client_id = _client_id(
+            _required_text_value(self.client_id, "MS_ENTRA_CLIENT_ID"),
+            environment=environment,
+        )
         _require_canonical(self.client_id, client_id, "MS_ENTRA_CLIENT_ID")
         client_secret = _validate_secret_value(
-            self.client_secret, "MS_ENTRA_CLIENT_SECRET", minimum=24
+            self.client_secret,
+            "MS_ENTRA_CLIENT_SECRET",
+            minimum=24,
+            environment=environment,
+            cryptographic=False,
         )
         _require_canonical(self.client_secret, client_secret, "MS_ENTRA_CLIENT_SECRET")
-        tenant_id = _required_text_value(self.tenant_id, "MS_ENTRA_TENANT_ID")
+        tenant_id = _tenant_id(_required_text_value(self.tenant_id, "MS_ENTRA_TENANT_ID"))
         _require_canonical(self.tenant_id, tenant_id, "MS_ENTRA_TENANT_ID")
         redirect_uri = _redirect_uri(
             _required_text_value(self.redirect_uri, "MS_ENTRA_REDIRECT_URI")
@@ -236,28 +381,63 @@ class AppSettings:
             tls_required=self.redis_tls_required,
         )
         _require_canonical(self.redis_url, redis_url, "REDIS_URL")
-        _validate_positive_float(self.redis_socket_connect_timeout, "REDIS_CONNECT_TIMEOUT_SECONDS")
-        _validate_positive_float(self.redis_socket_timeout, "REDIS_READ_TIMEOUT_SECONDS")
-        _validate_non_negative_int(
+        _validate_bounded_positive_float(
+            self.redis_socket_connect_timeout,
+            "REDIS_CONNECT_TIMEOUT_SECONDS",
+            maximum=_MAX_REDIS_TIMEOUT_SECONDS,
+        )
+        _validate_bounded_positive_float(
+            self.redis_socket_timeout,
+            "REDIS_READ_TIMEOUT_SECONDS",
+            maximum=_MAX_REDIS_TIMEOUT_SECONDS,
+        )
+        _validate_bounded_non_negative_int(
             self.redis_health_check_interval,
             "REDIS_HEALTH_CHECK_INTERVAL_SECONDS",
+            maximum=_MAX_REDIS_HEALTH_INTERVAL_SECONDS,
         )
-        _validate_positive_int(self.session_lifetime_seconds, "SESSION_LIFETIME_SECONDS")
+        _validate_bounded_positive_int(
+            self.session_lifetime_seconds,
+            "SESSION_LIFETIME_SECONDS",
+            maximum=_MAX_SESSION_LIFETIME_SECONDS,
+        )
         _validate_boolean(self.session_refresh_each_request, "SESSION_REFRESH_EACH_REQUEST")
         _validate_boolean(self.cookie_secure, "SESSION_COOKIE_SECURE")
         cookie_samesite = _samesite(
             _required_text_value(self.cookie_samesite, "SESSION_COOKIE_SAMESITE")
         )
         _require_canonical(self.cookie_samesite, cookie_samesite, "SESSION_COOKIE_SAMESITE")
-        graph_base_url = _https_url(
-            _required_text_value(self.graph_base_url, "GRAPH_BASE_URL"), "GRAPH_BASE_URL"
-        ).rstrip("/")
+
+        graph_base_url = _graph_base_url(
+            _required_text_value(self.graph_base_url, "GRAPH_BASE_URL")
+        )
         _require_canonical(self.graph_base_url, graph_base_url, "GRAPH_BASE_URL")
-        _validate_positive_float(self.graph_connect_timeout, "GRAPH_CONNECT_TIMEOUT_SECONDS")
-        _validate_positive_float(self.graph_read_timeout, "GRAPH_READ_TIMEOUT_SECONDS")
+        _validate_bounded_positive_float(
+            self.graph_connect_timeout,
+            "GRAPH_CONNECT_TIMEOUT_SECONDS",
+            maximum=_MAX_GRAPH_CONNECT_TIMEOUT_SECONDS,
+        )
+        _validate_bounded_positive_float(
+            self.graph_read_timeout,
+            "GRAPH_READ_TIMEOUT_SECONDS",
+            maximum=_MAX_GRAPH_READ_TIMEOUT_SECONDS,
+        )
+        _validate_bounded_positive_int(
+            self.graph_max_response_bytes,
+            "GRAPH_MAX_RESPONSE_BYTES",
+            maximum=_MAX_GRAPH_RESPONSE_BYTES,
+        )
+        _validate_bounded_non_negative_int(
+            self.graph_max_retries,
+            "GRAPH_MAX_RETRIES",
+            maximum=_MAX_GRAPH_RETRIES,
+        )
+        _validate_bounded_positive_int(
+            self.graph_max_retry_after_seconds,
+            "GRAPH_MAX_RETRY_AFTER_SECONDS",
+            maximum=_MAX_RETRY_AFTER_SECONDS,
+        )
         _validate_proxy_hops(self.proxy_hops)
-        _validate_boolean(self.testing, "TESTING")
-        _validate_boolean(self.csrf_enabled, "WTF_CSRF_ENABLED")
 
         _validate_environment_security(
             environment=environment,
@@ -268,7 +448,12 @@ class AppSettings:
             cookie_samesite=cookie_samesite,
             redis_tls_required=self.redis_tls_required,
             testing=self.testing,
+            debug=self.debug,
             csrf_enabled=self.csrf_enabled,
+            secret_key=secret_key,
+            session_signing_keys=self.effective_session_signing_keys,
+            csrf_secret_key=self.effective_csrf_secret_key,
+            client_secret=client_secret,
         )
 
     def create_redis_client(self) -> Redis:
@@ -292,8 +477,10 @@ class AppSettings:
         return {
             "ENV": self.environment,
             "TESTING": self.testing,
-            "DEBUG": self.environment == "development",
+            "DEBUG": self.debug,
             "SECRET_KEY": self.secret_key,
+            "SESSION_SIGNING_KEYS": self.effective_session_signing_keys,
+            "WTF_CSRF_SECRET_KEY": self.effective_csrf_secret_key,
             "TRUSTED_HOSTS": list(self.trusted_hosts),
             "PREFERRED_URL_SCHEME": "https" if production else urlsplit(self.base_url).scheme,
             "MAX_CONTENT_LENGTH": 1 * 1024 * 1024,
@@ -315,7 +502,7 @@ class AppSettings:
             "MS_ENTRA_TENANT_ID": self.tenant_id,
             "MS_ENTRA_REDIRECT_URI": self.redirect_uri,
             "MS_ENTRA_SCOPES": list(self.scopes),
-            "MS_ENTRA_SESSION_NAMESPACE": "msentraauth-flask-template",
+            "MS_ENTRA_SESSION_NAMESPACE": "msentra-template",
             "MS_ENTRA_TOKEN_CACHE_TTL": self.session_lifetime_seconds,
             "MS_ENTRA_IDENTITY_TTL": self.session_lifetime_seconds,
             "MS_ENTRA_FLOW_TTL": min(self.session_lifetime_seconds, 600),
@@ -341,6 +528,7 @@ def _required_text_value(value: object, name: str) -> str:
     normalized = value.strip()
     if _contains_placeholder(normalized):
         raise SettingsError(f"{name} contains a placeholder")
+    _reject_control_characters(normalized, name)
     return normalized
 
 
@@ -349,11 +537,195 @@ def _contains_placeholder(value: str) -> bool:
     return normalized in _PLACEHOLDER_VALUES or normalized.startswith(_PLACEHOLDER_PREFIXES)
 
 
-def _validate_secret_value(value: object, name: str, *, minimum: int) -> str:
+def _text(values: Mapping[str, str], name: str, default: str | None = None) -> str:
+    raw = values.get(name, default)
+    if raw is None or not raw.strip():
+        raise SettingsError(f"{name} is required")
+    return _required_text_value(raw, name)
+
+
+def _sensitive_text(values: Mapping[str, str], name: str) -> str:
+    return _secret_source_raw(values, name, required=True)
+
+
+def _secret_source(
+    values: Mapping[str, str],
+    name: str,
+    *,
+    minimum: int,
+    environment: str,
+    cryptographic: bool,
+) -> str:
+    value = _secret_source_raw(values, name, required=True)
+    return _validate_secret_value(
+        value,
+        name,
+        minimum=minimum,
+        environment=environment,
+        cryptographic=cryptographic,
+    )
+
+
+def _optional_secret_source(
+    values: Mapping[str, str],
+    name: str,
+    *,
+    minimum: int,
+    environment: str,
+    cryptographic: bool,
+) -> str:
+    value = _secret_source_raw(values, name, required=False)
+    if not value:
+        return ""
+    return _validate_secret_value(
+        value,
+        name,
+        minimum=minimum,
+        environment=environment,
+        cryptographic=cryptographic,
+    )
+
+
+def _secret_source_raw(values: Mapping[str, str], name: str, *, required: bool) -> str:
+    direct = values.get(name)
+    file_name = f"{name}_FILE"
+    file_value = values.get(file_name)
+    if direct is not None and direct.strip() and file_value is not None and file_value.strip():
+        raise SettingsError(f"{name} and {file_name} cannot be configured together")
+    if file_value is not None and file_value.strip():
+        return _read_secret_file(file_value.strip(), file_name)
+    if direct is not None and direct.strip():
+        return _required_text_value(direct, name)
+    if required:
+        raise SettingsError(f"{name} is required")
+    return ""
+
+
+def _read_secret_file(file_name: str, setting_name: str) -> str:
+    path = Path(file_name)
+    if not path.is_absolute():
+        raise SettingsError(f"{setting_name} must be an absolute path")
+    try:
+        metadata = path.stat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_SECRET_FILE_BYTES:
+            raise SettingsError(f"{setting_name} must reference a small regular file")
+        raw = path.read_bytes()
+    except SettingsError:
+        raise
+    except OSError as exc:
+        raise SettingsError(f"{setting_name} could not be read") from exc
+    try:
+        value = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SettingsError(f"{setting_name} must contain UTF-8 text") from exc
+    value = value.rstrip("\r\n")
+    if not value:
+        raise SettingsError(f"{setting_name} is empty")
+    return value
+
+
+def _secret_ring_source(
+    values: Mapping[str, str],
+    name: str,
+    *,
+    minimum: int,
+    environment: str,
+) -> tuple[str, ...]:
+    raw = _secret_source_raw(values, name, required=environment == "production")
+    if not raw:
+        return ()
+    parts = tuple(part.strip() for part in re.split(r"[,\r\n]+", raw) if part.strip())
+    return _validate_secret_ring(
+        parts,
+        name,
+        minimum=minimum,
+        environment=environment,
+        required=environment == "production",
+    )
+
+
+def _validate_secret_ring(
+    values: object,
+    name: str,
+    *,
+    minimum: int,
+    environment: str,
+    required: bool,
+) -> tuple[str, ...]:
+    if not isinstance(values, (tuple, list)):
+        raise SettingsError(f"{name} must contain an ordered key ring")
+    normalized = tuple(
+        _validate_secret_value(
+            value,
+            name,
+            minimum=minimum,
+            environment=environment,
+            cryptographic=True,
+        )
+        for value in values
+    )
+    if required and not normalized:
+        raise SettingsError(f"{name} is required in production")
+    if len(normalized) > _MAX_SESSION_KEYS:
+        raise SettingsError(f"{name} cannot contain more than {_MAX_SESSION_KEYS} keys")
+    if len(set(normalized)) != len(normalized):
+        raise SettingsError(f"{name} cannot contain duplicate keys")
+    return normalized
+
+
+def _validate_optional_secret_value(
+    value: object,
+    name: str,
+    *,
+    minimum: int,
+    environment: str,
+    cryptographic: bool,
+    required: bool,
+) -> str:
+    if value == "" and not required:
+        return ""
+    if value == "" and required:
+        raise SettingsError(f"{name} is required in production")
+    return _validate_secret_value(
+        value,
+        name,
+        minimum=minimum,
+        environment=environment,
+        cryptographic=cryptographic,
+    )
+
+
+def _validate_secret_value(
+    value: object,
+    name: str,
+    *,
+    minimum: int,
+    environment: str,
+    cryptographic: bool,
+) -> str:
     normalized = _required_text_value(value, name)
     if len(normalized) < minimum:
         raise SettingsError(f"{name} must contain at least {minimum} characters")
+    if len(normalized) > _MAX_SECRET_CHARACTERS:
+        raise SettingsError(f"{name} is too long")
+    if environment == "production" and cryptographic:
+        _validate_base64url_secret(normalized, name)
+    if environment == "production" and not cryptographic:
+        if len(set(normalized)) < 8:
+            raise SettingsError(f"{name} does not have enough character diversity")
     return normalized
+
+
+def _validate_base64url_secret(value: str, name: str) -> None:
+    if not _BASE64URL_RE.fullmatch(value):
+        raise SettingsError(f"{name} must be URL-safe base64 in production")
+    try:
+        padded = value + ("=" * (-len(value) % 4))
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+        raise SettingsError(f"{name} must be URL-safe base64 in production") from exc
+    if len(decoded) < 32:
+        raise SettingsError(f"{name} must encode at least 32 random bytes in production")
 
 
 def _validate_string_values(values: object, name: str) -> tuple[str, ...]:
@@ -363,56 +735,6 @@ def _validate_string_values(values: object, name: str) -> tuple[str, ...]:
     if not normalized:
         raise SettingsError(f"{name} must contain at least one value")
     return normalized
-
-
-def _validate_boolean(value: object, name: str) -> None:
-    if not isinstance(value, bool):
-        raise SettingsError(f"{name} must be a boolean")
-
-
-def _validate_non_negative_int(value: object, name: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise SettingsError(f"{name} must be an integer")
-    if value < 0:
-        raise SettingsError(f"{name} cannot be negative")
-
-
-def _validate_positive_int(value: object, name: str) -> None:
-    _validate_non_negative_int(value, name)
-    if value == 0:
-        raise SettingsError(f"{name} must be positive")
-
-
-def _validate_proxy_hops(proxy_hops: object) -> None:
-    if not isinstance(proxy_hops, ProxyHops):
-        raise SettingsError("proxy_hops must be ProxyHops")
-    for name, value in (
-        ("PROXY_X_FOR", proxy_hops.x_for),
-        ("PROXY_X_PROTO", proxy_hops.x_proto),
-        ("PROXY_X_HOST", proxy_hops.x_host),
-        ("PROXY_X_PORT", proxy_hops.x_port),
-        ("PROXY_X_PREFIX", proxy_hops.x_prefix),
-    ):
-        _validate_non_negative_int(value, name)
-        if value > 5:
-            raise SettingsError(f"{name} cannot exceed 5")
-
-
-def _text(values: Mapping[str, str], name: str, default: str | None = None) -> str:
-    raw = values.get(name, default)
-    if raw is None or not raw.strip():
-        raise SettingsError(f"{name} is required")
-    value = raw.strip()
-    if _contains_placeholder(value):
-        raise SettingsError(f"{name} contains a placeholder")
-    return value
-
-
-def _secret(values: Mapping[str, str], name: str, *, minimum: int) -> str:
-    value = _text(values, name)
-    if len(value) < minimum:
-        raise SettingsError(f"{name} must contain at least {minimum} characters")
-    return value
 
 
 def _csv(values: Mapping[str, str], name: str, default: str) -> tuple[str, ...]:
@@ -438,23 +760,31 @@ def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
     raise SettingsError(f"{name} must be a boolean")
 
 
-def _positive_int(values: Mapping[str, str], name: str, default: int) -> int:
-    value = _non_negative_int(values, name, default)
+def _validate_boolean(value: object, name: str) -> None:
+    if not isinstance(value, bool):
+        raise SettingsError(f"{name} must be a boolean")
+
+
+def _bounded_positive_int(
+    values: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    maximum: int,
+) -> int:
+    value = _bounded_non_negative_int(values, name, default, maximum=maximum)
     if value == 0:
         raise SettingsError(f"{name} must be positive")
     return value
 
 
 def _bounded_non_negative_int(
-    values: Mapping[str, str], name: str, default: int, *, maximum: int
+    values: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    maximum: int,
 ) -> int:
-    value = _non_negative_int(values, name, default)
-    if value > maximum:
-        raise SettingsError(f"{name} cannot exceed {maximum}")
-    return value
-
-
-def _non_negative_int(values: Mapping[str, str], name: str, default: int) -> int:
     raw = values.get(name)
     if raw is None:
         return default
@@ -462,12 +792,32 @@ def _non_negative_int(values: Mapping[str, str], name: str, default: int) -> int
         value = int(raw)
     except ValueError as exc:
         raise SettingsError(f"{name} must be an integer") from exc
-    if value < 0:
-        raise SettingsError(f"{name} cannot be negative")
+    _validate_bounded_non_negative_int(value, name, maximum=maximum)
     return value
 
 
-def _positive_float(values: Mapping[str, str], name: str, default: float) -> float:
+def _validate_bounded_non_negative_int(value: object, name: str, *, maximum: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SettingsError(f"{name} must be an integer")
+    if value < 0:
+        raise SettingsError(f"{name} cannot be negative")
+    if value > maximum:
+        raise SettingsError(f"{name} cannot exceed {maximum}")
+
+
+def _validate_bounded_positive_int(value: object, name: str, *, maximum: int) -> None:
+    _validate_bounded_non_negative_int(value, name, maximum=maximum)
+    if value == 0:
+        raise SettingsError(f"{name} must be positive")
+
+
+def _bounded_positive_float(
+    values: Mapping[str, str],
+    name: str,
+    default: float,
+    *,
+    maximum: float,
+) -> float:
     raw = values.get(name)
     if raw is None:
         return default
@@ -475,11 +825,11 @@ def _positive_float(values: Mapping[str, str], name: str, default: float) -> flo
         value = float(raw)
     except ValueError as exc:
         raise SettingsError(f"{name} must be numeric") from exc
-    _validate_positive_float(value, name)
+    _validate_bounded_positive_float(value, name, maximum=maximum)
     return value
 
 
-def _validate_positive_float(value: object, name: str) -> None:
+def _validate_bounded_positive_float(value: object, name: str, *, maximum: float) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise SettingsError(f"{name} must be numeric")
     normalized = float(value)
@@ -487,6 +837,8 @@ def _validate_positive_float(value: object, name: str) -> None:
         raise SettingsError(f"{name} must be finite")
     if normalized <= 0:
         raise SettingsError(f"{name} must be positive")
+    if normalized > maximum:
+        raise SettingsError(f"{name} cannot exceed {maximum:g}")
 
 
 def _environment(value: str) -> str:
@@ -511,67 +863,64 @@ def _samesite(value: str) -> str:
     return normalized
 
 
-def _web_url(value: str, name: str) -> str:
-    decoded = unquote(value)
-    if "\\" in decoded:
-        raise SettingsError(f"{name} cannot contain a backslash")
-    parsed = _parsed_url(value, name, schemes=("https", "http"), allow_credentials=False)
-    if parsed.scheme == "http" and not _is_loopback(parsed.hostname):
-        raise SettingsError(f"{name} must use HTTPS outside loopback")
-    return value
-
-
 def _base_url(value: str) -> str:
     name = "APP_BASE_URL"
     parsed = _web_url(value, name)
-    if urlsplit(parsed).query:
-        raise SettingsError(f"{name} cannot contain a query")
-    return parsed
-
-
-def _https_url(value: str, name: str) -> str:
-    parsed = urlsplit(value)
-    if parsed.scheme != "https":
-        raise SettingsError(f"{name} must use HTTPS")
-    parsed = _parsed_url(value, name, schemes=("https",), allow_credentials=False)
     if parsed.query:
         raise SettingsError(f"{name} cannot contain a query")
-    return value
+    if parsed.path not in {"", "/"}:
+        raise SettingsError(f"{name} must contain only the origin, without a path")
+    return _canonical_origin(parsed)
 
 
 def _redirect_uri(value: str) -> str:
     name = "MS_ENTRA_REDIRECT_URI"
     if len(value) > _MAX_REDIRECT_URI_LENGTH:
         raise SettingsError(f"{name} cannot exceed {_MAX_REDIRECT_URI_LENGTH} characters")
-    decoded = unquote(value)
+    if _UNSUPPORTED_ENCODED_SEPARATORS.search(value):
+        raise SettingsError(f"{name} cannot contain encoded path separators")
+    decoded = _decode_url_layers(value, name)
     if any(character in decoded for character in _UNSUPPORTED_REDIRECT_URI_CHARACTERS):
         raise SettingsError(f"{name} contains an unsupported character")
-    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
-        raise SettingsError(f"{name} contains a control character")
     parsed = _web_url(value, name)
-    hostname = urlsplit(parsed).hostname or ""
-    try:
-        hostname.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise SettingsError(f"{name} cannot use an internationalized domain name") from exc
-    if any(label.lower().startswith("xn--") for label in hostname.split(".")):
-        raise SettingsError(f"{name} cannot use an internationalized domain name")
+    if parsed.query:
+        raise SettingsError(f"{name} cannot contain a query")
+    path = parsed.path
+    if not path.startswith("/") or path == "/" or path.endswith("/"):
+        raise SettingsError(f"{name} must use a non-root static callback path")
+    if "//" in path or any(segment in {".", ".."} for segment in path.split("/")):
+        raise SettingsError(f"{name} contains an ambiguous path")
+    return value
+
+
+def _graph_base_url(value: str) -> str:
+    name = "GRAPH_BASE_URL"
+    parsed = _https_url(value, name)
+    if parsed.query:
+        raise SettingsError(f"{name} cannot contain a query")
+    canonical = value.rstrip("/")
+    if canonical not in _GRAPH_BASE_URLS:
+        raise SettingsError(f"{name} must use an approved Microsoft Graph endpoint")
+    return canonical
+
+
+def _web_url(value: str, name: str) -> SplitResult:
+    decoded = _decode_url_layers(value, name)
+    if "\\" in decoded:
+        raise SettingsError(f"{name} cannot contain a backslash")
+    parsed = _parsed_url(value, name, schemes=("https", "http"), allow_credentials=False)
+    if parsed.scheme == "http" and not _is_loopback(parsed.hostname):
+        raise SettingsError(f"{name} must use HTTPS outside loopback")
+    _canonical_hostname(parsed.hostname or "", name)
     return parsed
 
 
-def _redis_url(value: str, *, tls_required: bool) -> str:
-    parsed = _parsed_url(value, "REDIS_URL", schemes=("redis", "rediss"), allow_credentials=True)
-    controlled_options = {
-        name.casefold()
-        for name, _ in parse_qsl(parsed.query, keep_blank_values=True)
-        if name.casefold() in _REDIS_CONTROLLED_QUERY_OPTIONS
-    }
-    if controlled_options:
-        names = ", ".join(sorted(controlled_options))
-        raise SettingsError(f"REDIS_URL cannot override application-controlled options: {names}")
-    if tls_required and parsed.scheme != "rediss":
-        raise SettingsError("REDIS_URL must use rediss when REDIS_TLS_REQUIRED is true")
-    return value
+def _https_url(value: str, name: str) -> SplitResult:
+    if urlsplit(value).scheme != "https":
+        raise SettingsError(f"{name} must use HTTPS")
+    parsed = _parsed_url(value, name, schemes=("https",), allow_credentials=False)
+    _canonical_hostname(parsed.hostname or "", name)
+    return parsed
 
 
 def _parsed_url(
@@ -581,9 +930,7 @@ def _parsed_url(
     schemes: tuple[str, ...],
     allow_credentials: bool,
 ) -> SplitResult:
-    decoded = unquote(value)
-    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
-        raise SettingsError(f"{name} contains a control character")
+    _decode_url_layers(value, name)
     parsed = urlsplit(value)
     credentials_present = parsed.username is not None or parsed.password is not None
     if (
@@ -603,6 +950,141 @@ def _parsed_url(
     return parsed
 
 
+def _decode_url_layers(value: str, name: str) -> str:
+    decoded = value
+    for _ in range(3):
+        _reject_control_characters(decoded, name)
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            return decoded
+        decoded = next_value
+    _reject_control_characters(decoded, name)
+    if unquote(decoded) != decoded:
+        raise SettingsError(f"{name} contains excessive percent encoding")
+    return decoded
+
+
+def _reject_control_characters(value: str, name: str) -> None:
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise SettingsError(f"{name} contains a control character")
+
+
+def _canonical_origin(parsed: SplitResult) -> str:
+    hostname = _canonical_hostname(parsed.hostname or "", "APP_BASE_URL")
+    host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
+    default_port = 443 if parsed.scheme == "https" else 80
+    port = parsed.port
+    authority = host if port is None or port == default_port else f"{host}:{port}"
+    return f"{parsed.scheme}://{authority}"
+
+
+def _trusted_hosts(values: tuple[str, ...]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for value in values:
+        name = "APP_TRUSTED_HOSTS"
+        if value == "*" or value.startswith(".") or "*" in value:
+            raise SettingsError(f"{name} cannot contain wildcards or suffix patterns")
+        if "://" in value or "/" in value or "@" in value or "?" in value or "#" in value:
+            raise SettingsError(f"{name} must contain host names only")
+        host = value
+        port: int | None = None
+        if value.startswith("["):
+            closing = value.find("]")
+            if closing < 0:
+                raise SettingsError(f"{name} contains an invalid IPv6 host")
+            host = value[1:closing]
+            suffix = value[closing + 1 :]
+            if suffix:
+                if not suffix.startswith(":") or not suffix[1:].isdigit():
+                    raise SettingsError(f"{name} contains an invalid port")
+                port = int(suffix[1:])
+        elif value.count(":") == 1:
+            candidate_host, candidate_port = value.rsplit(":", 1)
+            if candidate_port.isdigit():
+                host = candidate_host
+                port = int(candidate_port)
+        if port is not None and not 1 <= port <= 65_535:
+            raise SettingsError(f"{name} contains an invalid port")
+        canonical_host = _canonical_hostname(host, name)
+        rendered = f"[{canonical_host}]" if ":" in canonical_host else canonical_host
+        if port is not None:
+            rendered = f"{rendered}:{port}"
+        if rendered not in normalized:
+            normalized.append(rendered)
+    if not normalized:
+        raise SettingsError("APP_TRUSTED_HOSTS must contain at least one value")
+    return tuple(normalized)
+
+
+def _canonical_hostname(hostname: str, name: str) -> str:
+    normalized = hostname.lower().rstrip(".")
+    if not normalized:
+        raise SettingsError(f"{name} contains an invalid host")
+    try:
+        return ip_address(normalized).compressed
+    except ValueError:
+        pass
+    try:
+        ascii_host = normalized.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise SettingsError(f"{name} contains an invalid host") from exc
+    if len(ascii_host) > 253 or any(
+        not _HOST_LABEL_RE.fullmatch(label) for label in ascii_host.split(".")
+    ):
+        raise SettingsError(f"{name} contains an invalid host")
+    return ascii_host
+
+
+def _client_id(value: str, *, environment: str) -> str:
+    normalized = _required_text_value(value, "MS_ENTRA_CLIENT_ID")
+    try:
+        return str(UUID(normalized))
+    except ValueError as exc:
+        if environment != "production":
+            return normalized
+        raise SettingsError("MS_ENTRA_CLIENT_ID must be a UUID in production") from exc
+
+
+def _tenant_id(value: str) -> str:
+    normalized = _required_text_value(value, "MS_ENTRA_TENANT_ID").lower()
+    if normalized in _SINGLE_TENANT_ALIASES:
+        raise SettingsError("MS_ENTRA_TENANT_ID must identify one tenant")
+    try:
+        return str(UUID(normalized))
+    except ValueError:
+        if "://" in normalized or "/" in normalized or "@" in normalized:
+            raise SettingsError("MS_ENTRA_TENANT_ID must be a tenant UUID or verified domain")
+        return _canonical_hostname(normalized, "MS_ENTRA_TENANT_ID")
+
+
+def _redis_url(value: str, *, tls_required: bool) -> str:
+    parsed = _parsed_url(value, "REDIS_URL", schemes=("redis", "rediss"), allow_credentials=True)
+    controlled_options = {
+        name.casefold()
+        for name, _ in parse_qsl(parsed.query, keep_blank_values=True)
+        if name.casefold() in _REDIS_CONTROLLED_QUERY_OPTIONS
+    }
+    if controlled_options:
+        names = ", ".join(sorted(controlled_options))
+        raise SettingsError(f"REDIS_URL cannot override application-controlled options: {names}")
+    if tls_required and parsed.scheme != "rediss":
+        raise SettingsError("REDIS_URL must use rediss when REDIS_TLS_REQUIRED is true")
+    return value
+
+
+def _validate_proxy_hops(proxy_hops: object) -> None:
+    if not isinstance(proxy_hops, ProxyHops):
+        raise SettingsError("proxy_hops must be ProxyHops")
+    for name, value in (
+        ("PROXY_X_FOR", proxy_hops.x_for),
+        ("PROXY_X_PROTO", proxy_hops.x_proto),
+        ("PROXY_X_HOST", proxy_hops.x_host),
+        ("PROXY_X_PORT", proxy_hops.x_port),
+        ("PROXY_X_PREFIX", proxy_hops.x_prefix),
+    ):
+        _validate_bounded_non_negative_int(value, name, maximum=5)
+
+
 def _validate_environment_security(
     *,
     environment: str,
@@ -613,13 +1095,23 @@ def _validate_environment_security(
     cookie_samesite: str,
     redis_tls_required: bool,
     testing: bool,
+    debug: bool,
     csrf_enabled: bool,
+    secret_key: str,
+    session_signing_keys: tuple[str, ...],
+    csrf_secret_key: str,
+    client_secret: str,
 ) -> None:
     base = urlsplit(base_url)
     redirect = urlsplit(redirect_uri)
     if _origin(base) != _origin(redirect):
         raise SettingsError("MS_ENTRA_REDIRECT_URI must use the same origin as APP_BASE_URL")
-    if not any(_trusted_host_matches(base.hostname or "", pattern) for pattern in trusted_hosts):
+    base_host = _render_host_for_trust(base)
+    canonical_hostname = _canonical_hostname(base.hostname or "", "APP_BASE_URL")
+    host_without_port = (
+        f"[{canonical_hostname}]" if ":" in canonical_hostname else canonical_hostname
+    )
+    if not {base_host, host_without_port}.intersection(trusted_hosts):
         raise SettingsError("APP_TRUSTED_HOSTS must include the APP_BASE_URL host")
     if cookie_samesite == "None" and not cookie_secure:
         raise SettingsError("SESSION_COOKIE_SECURE must be true when SameSite=None")
@@ -632,24 +1124,29 @@ def _validate_environment_security(
             raise SettingsError("REDIS_TLS_REQUIRED must be true in production")
         if testing:
             raise SettingsError("TESTING must be false in production")
+        if debug:
+            raise SettingsError("DEBUG must be false in production")
         if not csrf_enabled:
             raise SettingsError("WTF_CSRF_ENABLED must be true in production")
+        independent = (secret_key, csrf_secret_key, client_secret, *session_signing_keys)
+        if len(set(independent)) != len(independent):
+            raise SettingsError("production secrets must use independent values")
 
 
-def _origin(parsed: SplitResult) -> tuple[str, str, int | None]:
+def _render_host_for_trust(parsed: SplitResult) -> str:
+    hostname = _canonical_hostname(parsed.hostname or "", "APP_BASE_URL")
+    rendered = f"[{hostname}]" if ":" in hostname else hostname
+    default_port = 443 if parsed.scheme == "https" else 80
+    if parsed.port is not None and parsed.port != default_port:
+        return f"{rendered}:{parsed.port}"
+    return rendered
+
+
+def _origin(parsed: SplitResult) -> tuple[str, str, int]:
     port = parsed.port
     if port is None:
         port = 443 if parsed.scheme.lower() == "https" else 80
-    return (parsed.scheme.lower(), (parsed.hostname or "").lower(), port)
-
-
-def _trusted_host_matches(hostname: str, pattern: str) -> bool:
-    normalized_host = hostname.lower().rstrip(".")
-    normalized_pattern = pattern.lower().rstrip(".")
-    if normalized_pattern.startswith("."):
-        suffix = normalized_pattern[1:]
-        return normalized_host == suffix or normalized_host.endswith(f".{suffix}")
-    return normalized_host == normalized_pattern
+    return (parsed.scheme.lower(), _canonical_hostname(parsed.hostname or "", "URL"), port)
 
 
 def _is_loopback(hostname: str | None) -> bool:

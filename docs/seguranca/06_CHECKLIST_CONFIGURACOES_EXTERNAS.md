@@ -84,3 +84,13 @@ Cada item externo precisa registrar:
 - plano de rollback ou rotação.
 
 Até isso ocorrer, o estado continua `BLOQUEADO_EXTERNO`.
+
+## Evidências específicas da SEC-02
+
+- [ ] Secret manager fornece APP, SID, CSRF, Entra e Redis por identidades de menor privilégio.
+- [ ] Rotação do ring do SID foi exercitada sem manter chave anterior além de uma vida útil de sessão.
+- [ ] App Registration usa tenant específico, redirect exata e somente `User.Read`.
+- [ ] Client secret possui expiração e procedimento de revogação; certificado/federação está planejado na extensão.
+- [ ] Egress permite somente Microsoft identity global, `graph.microsoft.com` e Redis autorizado.
+- [ ] Proxy corporativo não é necessário para Graph; se for, o contrato deve ser explícito e revisado.
+- [ ] Logs de sign-in e Conditional Access foram validados em tenant de teste.

@@ -18,15 +18,15 @@ Este diretório é a fonte de verdade do programa de segurança do
 O repositório já possui um plano mestre funcional com etapas 00 a 08 concluídas em
 `docs/13_PLANO_MESTRE.md`. Para evitar colisão, este programa usa o prefixo `SEC`:
 
-| Pacote Mestre | Identificador no repositório | Escopo |
-|---|---|---|
-| ETAPA-00 | `SEC-00` | Contrato, baseline e governança executável |
-| ETAPA-01 | `SEC-01` | Supply chain, CI/CD, artefatos e contêineres |
-| ETAPA-02 | `SEC-02` | Configuração, segredos, Entra ID e Graph |
-| ETAPA-03 | `SEC-03` | Redis, integridade e ciclo de vida de sessão |
-| ETAPA-04 | `SEC-04` | Autorização deny-by-default e vínculo local |
-| ETAPA-05 | `SEC-05` | Borda HTTP, proxy, abuso, runtime e observabilidade |
-| ETAPA-06 | `SEC-06` | Validação ofensiva, fechamento e evidências |
+| Pacote Mestre | Identificador no repositório | Escopo                                              |
+| ------------- | ---------------------------- | --------------------------------------------------- |
+| ETAPA-00      | `SEC-00`                     | Contrato, baseline e governança executável          |
+| ETAPA-01      | `SEC-01`                     | Supply chain, CI/CD, artefatos e contêineres        |
+| ETAPA-02      | `SEC-02`                     | Configuração, segredos, Entra ID e Graph            |
+| ETAPA-03      | `SEC-03`                     | Redis, integridade e ciclo de vida de sessão        |
+| ETAPA-04      | `SEC-04`                     | Autorização deny-by-default e vínculo local         |
+| ETAPA-05      | `SEC-05`                     | Borda HTTP, proxy, abuso, runtime e observabilidade |
+| ETAPA-06      | `SEC-06`                     | Validação ofensiva, fechamento e evidências         |
 
 ## Documentos
 
@@ -39,6 +39,7 @@ O repositório já possui um plano mestre funcional com etapas 00 a 08 concluíd
 7. [Configurações externas](06_CHECKLIST_CONFIGURACOES_EXTERNAS.md)
 8. [Status rastreável](07_STATUS.md)
 9. [Supply chain e artefatos](08_SUPPLY_CHAIN.md)
+10. [Configuração, Entra ID e Graph](09_CONFIGURACAO_ENTRA_GRAPH.md)
 
 ## Estados permitidos
 
@@ -82,4 +83,4 @@ autorização ou publicação build-once, exigem ADR na etapa responsável.
 
 ## Estado da fundação
 
-A documentação da `SEC-00` está implementada. A `SEC-01` endurece supply chain, CI/CD e contêineres. Ambas permanecem `PARCIAL` até execução do gate oficial em checkout completo; na `SEC-01`, os locks transitivos com hashes também continuam pendentes.
+A documentação da `SEC-00`, o hardening de supply chain da `SEC-01` e o código de configuração/Graph da `SEC-02` estão implementados. As etapas permanecem `PARCIAL` enquanto gates indisponíveis e controles externos ou da extensão não tiverem evidência real.

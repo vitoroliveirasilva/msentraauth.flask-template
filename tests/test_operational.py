@@ -27,6 +27,7 @@ def test_proxy_hsts_invalid_ready_and_graph_error(
         redis_url="rediss://redis.example.test:6380/0",
         redis_tls_required=True,
         testing=False,
+        debug=False,
         csrf_enabled=True,
         proxy_hops=ProxyHops(x_for=1, x_proto=1),
     )
@@ -45,7 +46,6 @@ def test_proxy_hsts_invalid_ready_and_graph_error(
     app.extensions["template_redis"] = object()
     assert client.get("/health/ready", base_url="https://localhost").status_code == 503
 
-    # Restore Redis and complete authentication before exercising Graph's handler.
     app.extensions["template_redis"] = redis_double
     login = client.get("/auth/login", base_url="https://localhost")
     location = login.headers["Location"]
@@ -62,7 +62,7 @@ def test_proxy_hsts_invalid_ready_and_graph_error(
     assert "Microsoft Graph indisponível" in graph.text
 
 
-def test_graph_unauthorized_and_invalid_response_handlers(
+def test_graph_unauthorized_forbidden_and_invalid_response_handlers(
     settings: AppSettings,
     redis_double: RedisDouble,
     msal_runtime: tuple[FakeMsalClient, object],
@@ -78,20 +78,60 @@ def test_graph_unauthorized_and_invalid_response_handlers(
     client = app.test_client()
     login = client.get("/auth/login")
     state = login.headers["Location"].split("state=", 1)[1]
-    assert (
-        client.get("/auth/callback", query_string={"code": "code", "state": state}).status_code
-        == 302
-    )
+    assert client.get(
+        "/auth/callback", query_string={"code": "code", "state": state}
+    ).status_code == 302
 
     transport.response = GraphResponse(401, {})
     unauthorized = client.get("/profile")
-    assert unauthorized.status_code == 502
+    assert unauthorized.status_code == 401
     assert "recusou o acesso" in unauthorized.text
+
+    transport.response = GraphResponse(403, {})
+    forbidden = client.get("/profile")
+    assert forbidden.status_code == 403
+    assert "não autorizada" in forbidden.text
 
     transport.response = GraphResponse(400, {})
     invalid = client.get("/profile")
     assert invalid.status_code == 502
     assert "Resposta inválida" in invalid.text
+
+
+def test_graph_claims_challenge_is_bounded_and_does_not_redirect_loop(
+    settings: AppSettings,
+    redis_double: RedisDouble,
+    msal_runtime: tuple[FakeMsalClient, object],
+) -> None:
+    _, factory = msal_runtime
+    transport = GraphTransportDouble()
+    app = create_app(
+        settings,
+        redis_client=redis_double,
+        msal_client_factory=factory,  # type: ignore[arg-type]
+        graph_transport=transport,
+    )
+    client = app.test_client()
+    state = client.get("/auth/login").headers["Location"].split("state=", 1)[1]
+    assert client.get(
+        "/auth/callback", query_string={"code": "code", "state": state}
+    ).status_code == 302
+
+    transport.response = GraphResponse(
+        401,
+        {},
+        headers={
+            "WWW-Authenticate": (
+                'Bearer error="insufficient_claims", '
+                'claims="{\\"access_token\\":{\\"xms_cc\\":{\\"values\\":[\\"cp1\\"]}}}"'
+            )
+        },
+    )
+    challenged = client.get("/profile")
+    assert challenged.status_code == 401
+    assert "autenticação adicional" in challenged.text
+    assert "Location" not in challenged.headers
+    assert "xms_cc" not in challenged.text
 
 
 def test_static_assets_keep_cache_policy(

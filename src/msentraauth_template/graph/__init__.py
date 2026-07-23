@@ -1,3 +1,25 @@
-from .client import GraphClient, GraphError, GraphProfile, GraphUnavailable
+from .client import (
+    GraphClaimsChallenge,
+    GraphClient,
+    GraphError,
+    GraphForbidden,
+    GraphProfile,
+    GraphRateLimited,
+    GraphRedirectRejected,
+    GraphResponseTooLarge,
+    GraphUnauthorized,
+    GraphUnavailable,
+)
 
-__all__ = ["GraphClient", "GraphError", "GraphProfile", "GraphUnavailable"]
+__all__ = [
+    "GraphClaimsChallenge",
+    "GraphClient",
+    "GraphError",
+    "GraphForbidden",
+    "GraphProfile",
+    "GraphRateLimited",
+    "GraphRedirectRejected",
+    "GraphResponseTooLarge",
+    "GraphUnauthorized",
+    "GraphUnavailable",
+]

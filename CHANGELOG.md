@@ -4,6 +4,14 @@
 
 ### Segurança
 
+- Segredos de Flask, assinatura do SID e CSRF passam a ser separados, com key ring e rotação compatível;
+- Configurações sensíveis podem ser lidas por secret mounts via variáveis `_FILE`;
+- Produção rejeita chaves criptográficas fracas ou reutilizadas, DEBUG, tenant genérico, URL-base com path e hosts curinga;
+- O endpoint Graph fica restrito ao cloud global aprovado, sem redirects, proxy de ambiente ou `.netrc`;
+- Respostas Graph são lidas por streaming com limites de corpo, tipo e campos do DTO;
+- 401, 403, 429, 5xx, redirects e claims challenge possuem tratamento separado e sanitizado;
+- `Retry-After` é interpretado com teto configurável e o User-Agent usa a versão instalada;
+- O template detecta CAE sem loop automático e registra a dependência de evolução da extensão.
 - GitHub Actions passam a usar SHAs completos, permissões mínimas e checkout sem credenciais persistidas;
 - Python e Redis são referenciados por digests OCI validados;
 - CI, Docker e scripts usam constraints diretas exatas, com procedimento para locks transitivos com hashes;
