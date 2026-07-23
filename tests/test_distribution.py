@@ -46,7 +46,7 @@ def test_build_contains_application_assets_and_operational_files() -> None:
         metadata_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
         metadata = wheel.read(metadata_name).decode()
         assert f"Version: {_VERSION}" in metadata
-        assert "Requires-Dist: flask-ms-entra-auth<2,>=1.0" in metadata
+        assert "Requires-Dist: flask-ms-entra-auth==1.0.0" in metadata
 
     with tarfile.open(sdists[0], "r:gz") as sdist:
         names = set(sdist.getnames())
@@ -55,7 +55,11 @@ def test_build_contains_application_assets_and_operational_files() -> None:
             "/compose.yaml",
             "/.env.example",
             "/.github/workflows/ci.yml",
+            "/.github/workflows/dependency-review.yml",
             "/docs/implementation/status.md",
+            "/docs/seguranca/08_SUPPLY_CHAIN.md",
+            "/requirements/runtime.constraints.txt",
+            "/scripts/validate_supply_chain.py",
             "/tests/test_extension_contract.py",
             "/wsgi.py",
         ):

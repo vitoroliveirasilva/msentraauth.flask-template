@@ -1,0 +1,16 @@
+-c runtime.constraints.txt
+bandit==1.9.4
+build==1.5.1
+cyclonedx-bom==7.3.0
+fakeredis==2.36.2
+hatchling==1.31.0
+mypy==2.3.0
+pip-audit==2.10.1
+pip==26.1.2
+pip-tools==7.6.0
+pytest==9.1.1
+pytest-cov==7.1.0
+python-dotenv==1.2.2
+ruff==0.15.22
+twine==6.2.0
+types-requests==2.33.0.20260712

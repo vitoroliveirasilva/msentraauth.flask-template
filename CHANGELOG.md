@@ -2,6 +2,18 @@
 
 ## Não lançado
 
+### Segurança
+
+- GitHub Actions passam a usar SHAs completos, permissões mínimas e checkout sem credenciais persistidas;
+- Python e Redis são referenciados por digests OCI validados;
+- CI, Docker e scripts usam constraints diretas exatas, com procedimento para locks transitivos com hashes;
+- A extensão de autenticação é fixada em `flask-ms-entra-auth==1.0.0`;
+- O fluxo de publicação constrói uma única imagem multi-plataforma, testa o digest exato e promove os mesmos bytes;
+- Pacotes e imagens recebem checksums, SBOM, provenance, attestations e scanner bloqueante;
+- Dependency Review passa a bloquear dependências de severidade alta ou crítica;
+- O contexto Docker usa allowlist e o Compose restringe rede, senha Redis, capabilities e recursos.
+
+
 ## 1.0.1 - 2026-07-22
 
 ### Corrigido

@@ -3,24 +3,31 @@ services:
     build:
       context: .
       target: runtime
+    user: "10001:10001"
     env_file: .env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}@redis:6379/0
       REDIS_TLS_REQUIRED: "false"
     ports:
-      - "5000:8000"
+      - "127.0.0.1:5000:8000"
     depends_on:
       redis:
         condition: service_healthy
+    networks:
+      - frontend
+      - backend
     init: true
     restart: unless-stopped
     read_only: true
     tmpfs:
-      - /tmp:size=64m,noexec,nosuid
+      - /tmp:size=64m,noexec,nosuid,nodev,mode=1777
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: 1.0
     stop_grace_period: 35s
     logging:
       options:
@@ -28,7 +35,7 @@ services:
         max-file: "3"
 
   redis:
-    image: redis:8-alpine
+    image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
     command:
       - redis-server
       - --appendonly
@@ -36,20 +43,39 @@ services:
       - --save
       - "60"
       - "1000"
+      - --requirepass
+      - ${REDIS_PASSWORD:?defina REDIS_PASSWORD no .env}
     restart: unless-stopped
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev,mode=1777
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD-SHELL
+        - redis-cli --no-auth-warning -a "$${REDIS_PASSWORD}" ping | grep -qx PONG
       interval: 5s
       timeout: 3s
       retries: 10
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 0.5
     logging:
       options:
         max-size: "10m"
         max-file: "3"
+
+networks:
+  frontend:
+  backend:
+    internal: true
 
 volumes:
   redis-data:

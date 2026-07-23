@@ -40,8 +40,11 @@ O registro local em memória é demonstrativo, autorização de negócio não es
 
 ## Programa de hardening de segurança
 
-A fundação documental `SEC-00` foi implementada sobre a branch `dev` no SHA
-`f2d20385ff180f016d12622c76554a3838532b74`. Seu estado permanece `PARCIAL` até o gate oficial ser executado em checkout local. O programa técnico `SEC-01` a `SEC-06` permanece aberto.
+A fundação documental `SEC-00` foi incorporada à branch `dev`. A `SEC-01` foi implementada sobre
+o SHA `18ee71ca8c7dbddd2fce06738c9ff974306a0861`, com Actions e imagens por digest, permissões
+mínimas, constraints diretas, build único, checksums, SBOM, attestations, scanner e Compose
+endurecido. Seu estado permanece `PARCIAL` até o gate oficial ser executado em checkout completo e
+os locks transitivos com hashes serem gerados e aprovados. `SEC-02` a `SEC-06` permanecem abertos.
 
 Consulte:
 

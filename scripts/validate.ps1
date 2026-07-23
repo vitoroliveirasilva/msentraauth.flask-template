@@ -20,14 +20,24 @@ $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Push-Location $repositoryRoot
 
 try {
-    Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "pip", "install", "-e", ".[dev]")
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @(
+        "-m", "pip", "install",
+        "--constraint", "requirements/build.constraints.txt",
+        "pip==26.1.2"
+    )
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @(
+        "-m", "pip", "install",
+        "--constraint", "requirements/development.constraints.txt",
+        "-e", ".[dev]"
+    )
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @("scripts/validate_supply_chain.py")
     Invoke-NativeCommand -FilePath "ruff" -ArgumentList @("check", ".")
     Invoke-NativeCommand -FilePath "ruff" -ArgumentList @("format", "--check", ".")
     Invoke-NativeCommand -FilePath "mypy" -ArgumentList @("src", "tests")
-    Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "compileall", "-q", "src", "tests")
+    Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "compileall", "-q", "src", "tests", "scripts")
     Invoke-NativeCommand -FilePath "pytest"
-    Invoke-NativeCommand -FilePath "bandit" -ArgumentList @("-c", "pyproject.toml", "-r", "src")
-    Invoke-NativeCommand -FilePath "pip-audit" -ArgumentList @(".")
+    Invoke-NativeCommand -FilePath "bandit" -ArgumentList @("-c", "pyproject.toml", "-r", "src", "scripts")
+    Invoke-NativeCommand -FilePath "pip-audit" -ArgumentList @("--local")
     Invoke-NativeCommand -FilePath "python" -ArgumentList @("-m", "pip", "check")
 
     Remove-Item -Recurse -Force dist, build -ErrorAction SilentlyContinue

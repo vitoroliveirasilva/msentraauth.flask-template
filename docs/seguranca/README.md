@@ -8,6 +8,7 @@ Este diretório é a fonte de verdade do programa de segurança do
 - Repositório: `vitoroliveirasilva/msentraauth.flask-template`
 - Branch de trabalho: `dev`
 - Baseline da `SEC-00`: `f2d20385ff180f016d12622c76554a3838532b74`
+- Baseline da `SEC-01`: `18ee71ca8c7dbddd2fce06738c9ff974306a0861`
 - Data do baseline: `2026-07-23`
 - Pacote de origem: `Pacote Mestre de Segurança 1.0.0`
 - Controles registrados: **156**
@@ -17,15 +18,15 @@ Este diretório é a fonte de verdade do programa de segurança do
 O repositório já possui um plano mestre funcional com etapas 00 a 08 concluídas em
 `docs/13_PLANO_MESTRE.md`. Para evitar colisão, este programa usa o prefixo `SEC`:
 
-| Pacote Mestre | Identificador no repositório | Escopo                                              |
-| ------------- | ---------------------------- | --------------------------------------------------- |
-| ETAPA-00      | `SEC-00`                     | Contrato, baseline e governança executável          |
-| ETAPA-01      | `SEC-01`                     | Supply chain, CI/CD, artefatos e contêineres        |
-| ETAPA-02      | `SEC-02`                     | Configuração, segredos, Entra ID e Graph            |
-| ETAPA-03      | `SEC-03`                     | Redis, integridade e ciclo de vida de sessão        |
-| ETAPA-04      | `SEC-04`                     | Autorização deny-by-default e vínculo local         |
-| ETAPA-05      | `SEC-05`                     | Borda HTTP, proxy, abuso, runtime e observabilidade |
-| ETAPA-06      | `SEC-06`                     | Validação ofensiva, fechamento e evidências         |
+| Pacote Mestre | Identificador no repositório | Escopo |
+|---|---|---|
+| ETAPA-00 | `SEC-00` | Contrato, baseline e governança executável |
+| ETAPA-01 | `SEC-01` | Supply chain, CI/CD, artefatos e contêineres |
+| ETAPA-02 | `SEC-02` | Configuração, segredos, Entra ID e Graph |
+| ETAPA-03 | `SEC-03` | Redis, integridade e ciclo de vida de sessão |
+| ETAPA-04 | `SEC-04` | Autorização deny-by-default e vínculo local |
+| ETAPA-05 | `SEC-05` | Borda HTTP, proxy, abuso, runtime e observabilidade |
+| ETAPA-06 | `SEC-06` | Validação ofensiva, fechamento e evidências |
 
 ## Documentos
 
@@ -37,6 +38,7 @@ O repositório já possui um plano mestre funcional com etapas 00 a 08 concluíd
 6. [Plano de testes e evidências](05_PLANO_DE_TESTES_E_EVIDENCIAS.md)
 7. [Configurações externas](06_CHECKLIST_CONFIGURACOES_EXTERNAS.md)
 8. [Status rastreável](07_STATUS.md)
+9. [Supply chain e artefatos](08_SUPPLY_CHAIN.md)
 
 ## Estados permitidos
 
@@ -80,4 +82,4 @@ autorização ou publicação build-once, exigem ADR na etapa responsável.
 
 ## Estado da fundação
 
-A documentação da `SEC-00` está implementada. O estado da etapa é `PARCIAL` até que `scripts/validate.sh` ou `scripts/validate.ps1` seja executado com sucesso em um checkout local completo.
+A documentação da `SEC-00` está implementada. A `SEC-01` endurece supply chain, CI/CD e contêineres. Ambas permanecem `PARCIAL` até execução do gate oficial em checkout completo; na `SEC-01`, os locks transitivos com hashes também continuam pendentes.
