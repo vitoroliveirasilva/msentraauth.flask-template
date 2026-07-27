@@ -1,7 +1,7 @@
 -c runtime.constraints.txt
 bandit==1.9.4
 build==1.5.1
-cyclonedx-bom==7.3.0
+cyclonedx-bom==7.3.1
 fakeredis==2.36.2
 hatchling==1.31.0
 mypy==2.3.0
