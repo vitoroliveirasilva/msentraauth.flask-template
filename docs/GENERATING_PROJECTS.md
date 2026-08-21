@@ -4,7 +4,7 @@ Use uma tag estável para aplicações reais. `dev` serve para testar o generato
 
 ```powershell
 cd C:\repos
-pipx install "copier==9.17.0"
+pipx install "copier==9.17.1"
 copier copy --vcs-ref v2.0.0 gh:vitoroliveirasilva/msentraauth.flask-template sistema-processos
 cd sistema-processos
 ```

@@ -14,7 +14,7 @@ Generator Copier de aplicações Flask com Microsoft Entra ID, sessão Redis ser
 
 ```powershell
 cd C:\repos
-pipx install "copier==9.17.0"
+pipx install "copier==9.17.1"
 copier copy --vcs-ref v2.0.0 gh:vitoroliveirasilva/msentraauth.flask-template sistema-processos
 cd .\sistema-processos
 ```
