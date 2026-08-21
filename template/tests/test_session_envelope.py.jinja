@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+import base64
+import json
+from dataclasses import replace
+
+import pytest
+
+from {{ package_name }}.infrastructure.session_envelope import (
+    SessionEnvelopeCodec,
+    SessionEnvelopeError,
+    SessionEnvelopeExpired,
+    SessionMetadata,
+    subject_fingerprint,
+)
+
+
+def key(seed: int) -> str:
+    material = bytes((seed + index) % 256 for index in range(32))
+    return base64.urlsafe_b64encode(material).decode("ascii").rstrip("=")
+
+
+def codec(
+    *keys: str,
+    idle: int = 60,
+    absolute: int = 300,
+    renewal: int = 120,
+    skew: int = 5,
+    strict: bool = True,
+    plaintext_limit: int = 64 * 1024,
+    envelope_limit: int = 96 * 1024,
+) -> SessionEnvelopeCodec:
+    return SessionEnvelopeCodec(
+        keys or (key(1),),
+        namespace="test:session",
+        idle_timeout_seconds=idle,
+        absolute_timeout_seconds=absolute,
+        sid_renewal_seconds=renewal,
+        clock_skew_seconds=skew,
+        allowed_keys=("cart", "counter", "profile"),
+        strict_schema=strict,
+        max_plaintext_bytes=plaintext_limit,
+        max_envelope_bytes=envelope_limit,
+    )
+
+
+def test_round_trip_encrypts_and_authenticates_payload() -> None:
+    current = codec()
+    subject = subject_fingerprint("Tenant", "Object")
+    metadata = SessionMetadata(100, 100, 100, subject, 3)
+    data: dict[str, object] = {
+        "_permanent": True,
+        "_msentra_0123456789abcdef": {"session_id": "session_1", "flow_id": "flow-1"},
+        "cart": {"items": ["private", 2, True, None]},
+        "counter": 3,
+    }
+    sealed = current.seal("s" * 32, data, metadata)
+    assert b"private" not in sealed
+    decoded = current.open("s" * 32, sealed, now=101)
+    assert decoded.data == data
+    assert decoded.metadata == metadata
+    assert decoded.key_id == current.active_key_id
+    assert current.clock_skew_seconds == 5
+    assert current.absolute_timeout_seconds == 300
+    assert current.idle_timeout_seconds == 60
+
+
+def test_key_rotation_requests_rewrap_and_unknown_key_fails() -> None:
+    old = codec(key(1))
+    sealed = old.seal("s" * 32, {"counter": 1}, old.new_metadata(100))
+    rotated = codec(key(2), key(1))
+    assert rotated.open("s" * 32, sealed, now=101).needs_rewrap is True
+    with pytest.raises(SessionEnvelopeError, match="key"):
+        codec(key(2)).open("s" * 32, sealed, now=101)
+
+
+def test_wrong_sid_tampering_and_malformed_envelopes_are_rejected() -> None:
+    current = codec()
+    sealed = current.seal("s" * 32, {"counter": 1}, current.new_metadata(100))
+    with pytest.raises(SessionEnvelopeError, match="authentication"):
+        current.open("x" * 32, sealed, now=101)
+    outer = json.loads(sealed)
+    encoded_ciphertext = outer["ciphertext"]
+    padding = "=" * (-len(encoded_ciphertext) % 4)
+    ciphertext = bytearray(base64.urlsafe_b64decode(encoded_ciphertext + padding))
+    ciphertext[0] ^= 1
+    outer["ciphertext"] = base64.urlsafe_b64encode(ciphertext).decode("ascii").rstrip("=")
+    with pytest.raises(SessionEnvelopeError):
+        current.open("s" * 32, json.dumps(outer).encode(), now=101)
+    for invalid in (b"", b"[]", b"not-json", b"{}", b"x" * (96 * 1024 + 1)):
+        with pytest.raises(SessionEnvelopeError):
+            current.open("s" * 32, invalid, now=101)
+
+
+def test_idle_absolute_future_and_rotation_timestamps() -> None:
+    current = codec(idle=60, absolute=300, renewal=30, skew=5)
+    sealed = current.seal("s" * 32, {"counter": 1}, current.new_metadata(100))
+    assert current.open("s" * 32, sealed, now=130).rotation_due is True
+    with pytest.raises(SessionEnvelopeExpired, match="idle"):
+        current.open("s" * 32, sealed, now=166)
+    long_idle = codec(idle=300, absolute=300, renewal=30, skew=5)
+    absolute_sealed = long_idle.seal(
+        "s" * 32,
+        {},
+        SessionMetadata(100, 300, 100),
+    )
+    with pytest.raises(SessionEnvelopeExpired, match="absolute"):
+        long_idle.open("s" * 32, absolute_sealed, now=406)
+    invalid_timestamp = current.seal(
+        "s" * 32,
+        {},
+        SessionMetadata(100, 99, 100),
+    )
+    with pytest.raises(SessionEnvelopeError, match="timestamps"):
+        current.open("s" * 32, invalid_timestamp, now=100)
+
+
+def test_metadata_refresh_preserves_or_resets_lifetime() -> None:
+    current = codec()
+    original = SessionMetadata(100, 100, 100, subject_fingerprint("t", "o"), 1)
+    refreshed = current.refresh_metadata(original, 120, rotate_sid=True, subject_revision=2)
+    assert refreshed == SessionMetadata(100, 120, 120, original.subject_id, 2)
+    reset = current.refresh_metadata(refreshed, 130, reset_lifetime=True)
+    assert reset == SessionMetadata(130, 130, 130, original.subject_id, 2)
+    current.ensure_active(reset, 130)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"unknown": 1},
+        {"counter": float("nan")},
+        {"counter": 2**64},
+        {"counter": object()},
+        {"counter": [0] * 129},
+        {"counter": {"bad key": 1}},
+        {"_permanent": "yes"},
+        {"_msentra_0123456789abcdef": {"bad": "value"}},
+        {"_msentra_0123456789abcdef": {"session_id": "bad value"}},
+    ],
+)
+def test_invalid_session_data_is_rejected(data: dict[str, object]) -> None:
+    with pytest.raises(SessionEnvelopeError):
+        codec().seal("s" * 32, data, codec().new_metadata(100))
+
+
+def test_non_strict_schema_accepts_bounded_json_values() -> None:
+    current = codec(strict=False)
+    data = {"custom": {"nested": [1, 2.5, "value", None]}}
+    sealed = current.seal("s" * 32, data, current.new_metadata(100))
+    assert current.open("s" * 32, sealed, now=101).data == data
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"keys": ()},
+        {"keys": ("short",)},
+        {"keys": tuple(key(index) for index in range(6))},
+        {"namespace": "bad space"},
+        {"idle_timeout_seconds": 0},
+        {"absolute_timeout_seconds": 20},
+        {"sid_renewal_seconds": 300},
+        {"clock_skew_seconds": -1},
+        {"max_plaintext_bytes": 0},
+        {"max_envelope_bytes": 10},
+    ],
+)
+def test_constructor_rejects_unsafe_configuration(arguments: dict[str, object]) -> None:
+    values: dict[str, object] = {
+        "keys": (key(1),),
+        "namespace": "test:session",
+        "idle_timeout_seconds": 60,
+        "absolute_timeout_seconds": 300,
+        "sid_renewal_seconds": 120,
+        "clock_skew_seconds": 5,
+    }
+    values.update(arguments)
+    with pytest.raises((TypeError, ValueError)):
+        SessionEnvelopeCodec(**values)  # type: ignore[arg-type]
+
+
+def test_subject_fingerprint_is_stable_and_validated() -> None:
+    assert subject_fingerprint(" Tenant ", "Object") == subject_fingerprint("tenant", "object")
+    for tenant, object_id in (("", "object"), ("tenant", ""), ("x" * 257, "object")):
+        with pytest.raises(ValueError):
+            subject_fingerprint(tenant, object_id)
+
+
+def test_invalid_metadata_is_rejected() -> None:
+    current = codec()
+    metadata = current.new_metadata(100)
+    for invalid in (
+        replace(metadata, issued_at=-1),
+        replace(metadata, subject_id="invalid"),
+        replace(metadata, subject_revision=-1),
+    ):
+        with pytest.raises(SessionEnvelopeError):
+            current.seal("s" * 32, {}, invalid)

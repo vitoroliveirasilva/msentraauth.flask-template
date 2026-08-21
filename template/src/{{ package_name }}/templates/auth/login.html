@@ -1,0 +1,9 @@
+{% extends "layout/base.html" %}
+{% block title %}Entrar · {{ app_display_name }}{% endblock %}
+{% block content %}
+<section class="card auth-card">
+  <h1>Entrar</h1>
+  <p>Use sua conta corporativa Microsoft para continuar.</p>
+  <a class="button" href="{{ url_for('ms_entra_auth.login') }}">Continuar com Microsoft</a>
+</section>
+{% endblock %}

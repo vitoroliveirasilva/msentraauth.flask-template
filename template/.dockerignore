@@ -1,0 +1,12 @@
+**
+!.dockerignore
+!Dockerfile
+!LICENSE
+!README.md
+!pyproject.toml
+!requirements/
+!requirements/**
+!src/
+!src/**
+!wsgi.py
+!gunicorn.conf.py

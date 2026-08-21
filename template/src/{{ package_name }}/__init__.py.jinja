@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, cast
+
+from flask import Flask
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from .application import register_application
+from .auth.callback_alias import register_callback_alias
+from .auth.context import get_auth_context
+from .auth.hooks import AuthenticatedIdentityHandler, register_auth_hooks
+{% if include_graph_example %}from .blueprints.account.routes import create_account_blueprint
+{% endif %}from .blueprints.auth_ui.routes import create_auth_ui_blueprint
+from .blueprints.main.routes import create_main_blueprint
+from .blueprints.ops.routes import create_ops_blueprint
+from .errors import register_error_handlers
+from .extensions import csrf, entra_auth
+{% if include_graph_example %}from .features.graph.client import GraphClient, HttpTransport
+{% endif %}from .infrastructure.observability import configure_observability
+from .infrastructure.security import configure_security
+from .infrastructure.session_backend import (
+    RedisSessionInterface,
+    register_session_backend_guard,
+)
+from .infrastructure.storage import RedisAuthStorage, RedisClient
+from .runtime import extension_key
+from .settings import AppSettings
+
+if TYPE_CHECKING:
+    from flask_ms_entra_auth.auth.protocols import MsalClientFactory
+
+
+def create_app(
+    settings: AppSettings | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+    redis_client: RedisClient | None = None,
+    msal_client_factory: MsalClientFactory | None = None,
+    identity_handler: AuthenticatedIdentityHandler | None = None,
+{% if include_graph_example %}    graph_transport: HttpTransport | None = None,
+{% endif %}) -> Flask:
+    resolved = settings or AppSettings.from_env(environ)
+    resolved.validate()
+    app = Flask(__name__, instance_relative_config=True)
+    app.config.from_mapping(resolved.flask_config())
+    configure_observability(app, resolved)
+
+    client = cast(
+        RedisClient,
+        redis_client if redis_client is not None else resolved.create_redis_client(),
+    )
+    app.extensions[extension_key(app, "settings")] = resolved
+    app.extensions[extension_key(app, "redis")] = client
+
+    if resolved.proxy_hops.any_enabled:
+        app.wsgi_app = ProxyFix(  # type: ignore[method-assign]
+            app.wsgi_app,
+            x_for=resolved.proxy_hops.x_for,
+            x_proto=resolved.proxy_hops.x_proto,
+            x_host=resolved.proxy_hops.x_host,
+            x_port=resolved.proxy_hops.x_port,
+            x_prefix=resolved.proxy_hops.x_prefix,
+        )
+
+    session_codec = resolved.create_session_codec()
+    app.extensions[extension_key(app, "session_codec")] = session_codec
+    app.session_interface = RedisSessionInterface(
+        client,
+        codec=session_codec,
+        key_prefix=resolved.session_key_prefix,
+        revocation_prefix=resolved.revocation_key_prefix,
+    )
+    register_session_backend_guard(app)
+    csrf.init_app(app)
+
+    storage = RedisAuthStorage(client, key_prefix=resolved.auth_storage_key_prefix)
+    extension = entra_auth.with_runtime(storage=storage, msal_client_factory=msal_client_factory)
+    extension.init_app(app)
+    app.extensions[extension_key(app, "entra_auth")] = extension
+    register_auth_hooks(extension, app.logger, identity_handler)
+
+    app.register_blueprint(create_ops_blueprint())
+    app.register_blueprint(create_main_blueprint())
+    app.register_blueprint(create_auth_ui_blueprint())
+{% if include_graph_example %}    graph = GraphClient.from_settings(resolved, transport=graph_transport)
+    app.extensions[extension_key(app, "graph_client")] = graph
+    app.register_blueprint(create_account_blueprint(extension, graph))
+{% endif %}
+    register_application(app)
+    register_callback_alias(app, resolved.redirect_uri)
+    register_error_handlers(app)
+    configure_security(app, resolved)
+
+    @app.context_processor
+    def shared_template_context() -> dict[str, object]:
+        return {
+            "app_display_name": resolved.app_name,
+            "asset_version": resolved.asset_version,
+            "auth_context": get_auth_context(),
+            "graph_enabled": resolved.graph_enabled,
+        }
+
+    report = extension.audit_security(app)
+    app.extensions[extension_key(app, "security_report")] = report
+    return app
+
+
+__all__ = ["AppSettings", "create_app"]

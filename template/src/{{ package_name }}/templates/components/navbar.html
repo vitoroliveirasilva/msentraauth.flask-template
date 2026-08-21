@@ -1,0 +1,14 @@
+<nav class="navbar" aria-label="Navegação principal">
+  <a class="brand" href="{{ url_for('main.home') }}">{{ app_display_name }}</a>
+  <div class="nav-actions">
+    {% if auth_context.authenticated %}
+      {% if graph_enabled %}<a href="{{ url_for('account.profile') }}">Perfil</a>{% endif %}
+      <form action="{{ url_for('ms_entra_auth.logout') }}" method="post" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link-button">Sair</button>
+      </form>
+    {% else %}
+      <a href="{{ url_for('auth_ui.login') }}">Entrar</a>
+    {% endif %}
+  </div>
+</nav>

@@ -1,0 +1,10 @@
+{% extends "layout/base.html" %}
+{% block title %}Início · {{ app_display_name }}{% endblock %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">Flask + Microsoft Entra ID</p>
+  <h1>{{ app_display_name }}</h1>
+  <p>Base segura para começar a aplicação sem carregar regras de negócio do template.</p>
+  {% if not auth_context.authenticated %}<a class="button" href="{{ url_for('auth_ui.login') }}">Entrar com Microsoft</a>{% endif %}
+</section>
+{% endblock %}

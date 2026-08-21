@@ -1,0 +1,82 @@
+_min_copier_version: "9.17.1"
+_subdirectory: template
+_answers_file: .copier-answers.yml
+_templates_suffix: .jinja
+_preserve_symlinks: true
+_exclude:
+  - "{% if not include_graph_example %}src/{{ package_name }}/features/graph{% else %}__keep_graph__{% endif %}"
+  - "{% if not include_graph_example %}src/{{ package_name }}/blueprints/account{% else %}__keep_account__{% endif %}"
+  - "{% if not include_graph_example %}src/{{ package_name }}/templates/account{% else %}__keep_account_templates__{% endif %}"
+  - "{% if not include_graph_example %}tests/test_graph.py{% else %}__keep_graph_tests__{% endif %}"
+  - "{% if not include_graph_example %}tests/test_graph.py.jinja{% else %}__keep_graph_tests_template__{% endif %}"
+  - "{% if not include_graph_example %}docs/GRAPH.md{% else %}__keep_graph_docs__{% endif %}"
+
+project_name:
+  type: str
+  help: Nome amigável da aplicação
+  validator: >-
+    {% if not project_name.strip() or project_name != project_name.strip() or project_name|length > 80 or '"' in project_name or '\\' in project_name or '\n' in project_name or '\r' in project_name %}
+    Use de 1 a 80 caracteres, sem aspas, barras invertidas, quebras de linha ou espaços nas extremidades.
+    {% endif %}
+
+project_slug:
+  type: str
+  help: Identificador para repositório/serviço em kebab-case
+  default: "{{ project_name|lower|replace(' ', '-') }}"
+  validator: >-
+    {% set valid = namespace(value=true) %}
+    {% for character in project_slug %}{% if character not in 'abcdefghijklmnopqrstuvwxyz0123456789-' %}{% set valid.value = false %}{% endif %}{% endfor %}
+    {% if not project_slug or project_slug|length > 63 or not valid.value or project_slug[0] not in 'abcdefghijklmnopqrstuvwxyz0123456789' or project_slug[-1] not in 'abcdefghijklmnopqrstuvwxyz0123456789' or '--' in project_slug %}
+    Use de 1 a 63 caracteres ASCII minúsculos, números e hífens, sem hífens nas extremidades ou consecutivos.
+    {% endif %}
+
+package_name:
+  type: str
+  help: Nome importável em Python em snake_case
+  default: "{{ project_slug|replace('-', '_') }}"
+  validator: >-
+    {% set valid = namespace(value=true) %}
+    {% for character in package_name %}{% if character not in 'abcdefghijklmnopqrstuvwxyz0123456789_' %}{% set valid.value = false %}{% endif %}{% endfor %}
+    {% set keywords = ['and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'False', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'None', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'True', 'try', 'while', 'with', 'yield'] %}
+    {% if not package_name or package_name|length > 63 or not valid.value or package_name[0] not in 'abcdefghijklmnopqrstuvwxyz' or package_name[-1] == '_' or '__' in package_name or package_name in keywords %}
+    Use um identificador Python ASCII em snake_case, iniciado por letra, com até 63 caracteres e que não seja palavra reservada.
+    {% endif %}
+
+distribution_name:
+  type: str
+  default: "{{ project_slug }}"
+  when: false
+
+app_display_name:
+  type: str
+  default: "{{ project_name }}"
+  when: false
+
+project_description:
+  type: str
+  help: Descrição curta da aplicação
+  default: "Aplicação Flask com Microsoft Entra ID e sessão Redis server-side."
+  validator: >-
+    {% if not project_description.strip() or project_description != project_description.strip() or project_description|length > 200 or '"' in project_description or '\\' in project_description or '\n' in project_description or '\r' in project_description %}
+    Use de 1 a 200 caracteres, sem aspas, barras invertidas, quebras de linha ou espaços nas extremidades.
+    {% endif %}
+
+include_graph_example:
+  type: bool
+  help: Incluir exemplo opcional de Microsoft Graph (/profile e User.Read)
+  default: false
+
+python_version:
+  type: str
+  help: Versão principal do Python usada no projeto
+  default: "3.12"
+  choices:
+    "3.12": "3.12"
+    "3.13": "3.13"
+    "3.14": "3.14"
+
+python_image:
+  type: str
+  default: >-
+    {% if python_version == '3.12' %}python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134{% elif python_version == '3.13' %}python:3.13-slim-bookworm@sha256:00faa2debb87529f9f0764e9491d8ba400a3678976616c3bd7cb193745ac20d1{% else %}python:3.14-slim-bookworm@sha256:23c59390fc717bf09f9336908199a0ae75d9c4264bf296123f94ad772fea3b52{% endif %}
+  when: false

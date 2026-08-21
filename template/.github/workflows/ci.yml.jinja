@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "{{ python_version }}"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/*.constraints.txt
+      - name: Install pinned tooling and project
+        run: |
+          python -m pip install \
+            --constraint requirements/build.constraints.txt \
+            pip==26.1.2
+          python -m pip install \
+            --constraint requirements/development.constraints.txt \
+            -e '.[dev]'
+          python -m pip check
+      - run: python -m compileall -q src tests scripts
+      - run: ruff check src tests scripts gunicorn.conf.py wsgi.py
+      - run: mypy src
+      - run: pytest
+      - run: bandit -q -r src
+      - run: pip-audit --local
+      - run: python -m build
+      - name: Build container
+        run: docker build --tag {{ project_slug }}:local .
+      - name: Smoke test container and Redis
+        shell: bash
+        run: |
+          cp .env.example .env
+          docker compose up --detach --no-build
+          ready=false
+          for attempt in {1..45}; do
+            if curl --fail --silent --show-error http://127.0.0.1:8000/health/live >/dev/null \
+              && curl --fail --silent --show-error http://127.0.0.1:8000/health/ready >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != true ]]; then
+            docker compose logs
+            exit 1
+          fi
+      - name: Stop smoke environment
+        if: always()
+        run: docker compose down --volumes --remove-orphans
