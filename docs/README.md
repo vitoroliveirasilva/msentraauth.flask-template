@@ -1,32 +1,11 @@
-# Índice da documentação
+# Documentação do generator
 
-## Leitura recomendada
-
-1. [Visão e escopo;](01_VISAO_E_ESCOPO.md)
-2. [Arquitetura;](02_ARQUITETURA.md)
-3. [Relação com a extensão;](03_RELACAO_COM_A_EXTENSAO.md)
-4. [Protótipo e migração;](04_PROTOTIPO.md)
-5. [Fluxos da aplicação;](05_FLUXOS_DA_APLICACAO.md)
-6. [Microsoft Entra ID;](06_CONFIGURACAO_MICROSOFT_ENTRA_ID.md)
-7. [Ambientes e configuração;](07_AMBIENTES_E_CONFIGURACAO.md)
-8. [Microsoft Graph;](08_MICROSOFT_GRAPH.md)
-9. [Segurança;](09_SEGURANCA.md)
-10. [Testes e qualidade;](10_TESTES_E_QUALIDADE.md)
-11. [Deploy e operação;](11_DEPLOY_E_OPERACAO.md)
-12. [Observabilidade;](12_OBSERVABILIDADE.md)
-13. [Plano mestre;](13_PLANO_MESTRE.md)
-14. [Critérios de aceite;](14_CRITERIOS_DE_ACEITE.md)
-15. [Solução de problemas;](15_SOLUCAO_DE_PROBLEMAS.md)
-16. [Glossário;](16_GLOSSARIO.md)
-17. [Referências.](17_REFERENCIAS.md)
-
-Consulte também os [ADRs](decisoes/README.md) e o [status](implementation/status.md).
-
-## Programa de hardening
-
-O plano funcional acima permanece concluído e não deve ser confundido com o programa de
-segurança `SEC-00` a `SEC-06`.
-
-- [Índice do programa de hardening;](seguranca/README.md)
-- [Matriz de riscos e controles;](seguranca/02_MATRIZ_DE_RISCOS_E_CONTROLES.md)
-- [Status rastreável.](seguranca/07_STATUS.md)
+- [Comece aqui](00_COMECE_AQUI.md)
+- [Gerar um projeto](GENERATING_PROJECTS.md)
+- [Atualizar um projeto gerado](UPDATING_GENERATED_PROJECTS.md)
+- [Integrar em uma aplicação existente](INTEGRATING_EXISTING_APP.md)
+- [Migrar da linha 1.x](MIGRATION_V1_TO_V2.md)
+- [Fronteiras de ownership](OWNERSHIP.md)
+- [Arquitetura de segurança](SECURITY_ARCHITECTURE.md)
+- [Manutenção do template](TEMPLATE_MAINTAINERS.md)
+- [Diagnóstico de CSP](CSP_TROUBLESHOOTING.md)

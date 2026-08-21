@@ -1,0 +1,29 @@
+# {{ project_name }}
+
+{{ project_description }}
+
+Projeto gerado a partir de um template Flask reutilizável com Microsoft Entra ID, sessão server-side em Redis, CSRF, headers de segurança, observabilidade e Docker hardened.
+
+## Começando
+
+1. Copie `.env.example` para `.env`.
+2. Substitua todos os valores de desenvolvimento e configure o app registration do Microsoft Entra ID com o callback exato.
+3. Gere segredos aleatórios e independentes para aplicação, assinatura de SID, CSRF e payload de sessão.
+4. Suba Redis e a aplicação com `docker compose up --build` ou instale `.[dev]` localmente.
+5. Verifique `/health/live` e `/health/ready`.
+
+A rota `/login` é apenas a tela da aplicação. O protocolo OAuth/OIDC continua sob responsabilidade do `flask-ms-entra-auth` em `/auth/login`, `/auth/callback` e `/auth/logout`.
+
+Antes de publicar, rode `python scripts/validate.py`. Não use `.env.example` em produção e nunca versione `.env`.
+
+{% if include_graph_example %}## Microsoft Graph
+
+O exemplo Graph está habilitado. `/profile` solicita `User.Read` e demonstra integração isolada da infraestrutura principal. Consulte `docs/GRAPH.md`.
+{% endif %}
+## Extensão de negócio
+
+Registre blueprints e serviços próprios em `src/{{ package_name }}/application.py` ou em novos módulos de domínio. Evite colocar regra de negócio em `auth/` ou `infrastructure/`.
+
+## Segurança
+
+Leia `docs/SECURITY.md`. Produção exige HTTPS, Redis TLS, cookies Secure, CSRF habilitado, sessão estrita e segredos independentes.

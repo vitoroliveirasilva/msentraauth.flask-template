@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+import pytest
+from flask import Flask, Response, session
+
+from conftest import RedisDouble, session_app
+from {{ package_name }}.infrastructure.session_backend import (
+    RedisSession,
+    RedisSessionInterface,
+    SessionBackendError,
+    SessionBackendUnavailable,
+    register_session_backend_guard,
+)
+
+
+class Clock:
+    def __init__(self, value: float = 100.0) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+def configured_app(
+    redis: RedisDouble,
+    clock: Clock,
+) -> tuple[Flask, RedisSessionInterface]:
+    app, interface = session_app(redis, clock=clock)
+    register_session_backend_guard(app)
+
+    @app.get("/set")
+    def set_value() -> str:
+        session["value"] = "private"
+        return "set"
+
+    @app.get("/get")
+    def get_value() -> str:
+        return str(session.get("value", "missing"))
+
+    @app.get("/clear")
+    def clear_value() -> str:
+        session.clear()
+        return "cleared"
+
+    @app.get("/bind")
+    def bind_value() -> str:
+        interface.bind_identity(
+            app,
+            session,
+            tenant_id="tenant-id",
+            object_id="object-id",
+        )
+        return "bound"
+
+    return app, interface
+
+
+def test_round_trip_periodic_rotation_and_clear_cookie(redis_double: RedisDouble) -> None:
+    clock = Clock()
+    app, _ = configured_app(redis_double, clock)
+    client = app.test_client()
+    created = client.get("/set")
+    assert created.status_code == 200
+    first_cookie = client.get_cookie("test_session")
+    assert first_cookie is not None
+    assert len(redis_double.values) == 1
+    assert client.get("/get").text == "private"
+
+    clock.advance(31)
+    rotated = client.get("/get")
+    second_cookie = client.get_cookie("test_session")
+    assert rotated.status_code == 200
+    assert "Set-Cookie" in rotated.headers
+    assert second_cookie is not None and second_cookie.value != first_cookie.value
+    assert len(redis_double.values) == 1
+
+    cleared = client.get("/clear")
+    assert cleared.status_code == 200
+    assert client.get_cookie("test_session") is None
+    assert not redis_double.values
+
+
+def test_missing_or_invalid_server_state_discards_stale_cookie(redis_double: RedisDouble) -> None:
+    app, _ = configured_app(redis_double, Clock())
+    client = app.test_client()
+    client.get("/set")
+    redis_double.values.clear()
+    missing = client.get("/get")
+    assert missing.text == "missing"
+    assert client.get_cookie("test_session") is None
+
+    client.get("/set")
+    session_key = next(iter(redis_double.values))
+    redis_double.values[session_key] = b"not-an-envelope"
+    invalid = client.get("/get")
+    assert invalid.text == "missing"
+    assert client.get_cookie("test_session") is None
+
+
+def test_backend_outage_fails_closed_except_stateless_health(redis_double: RedisDouble) -> None:
+    app, _ = configured_app(redis_double, Clock())
+
+    @app.errorhandler(SessionBackendUnavailable)
+    def unavailable(_: SessionBackendUnavailable) -> tuple[str, int]:
+        return "unavailable", 503
+
+    client = app.test_client()
+    client.get("/set")
+    redis_double.fail = "get"
+    assert client.get("/get").status_code == 503
+    assert client.get("/health/live").status_code == 404
+
+
+def test_save_conflict_and_backend_errors_replace_response(redis_double: RedisDouble) -> None:
+    app, _ = configured_app(redis_double, Clock())
+    client = app.test_client()
+    redis_double.return_false = True
+    response = client.get("/set")
+    assert response.status_code == 503
+    assert response.text == "Service Unavailable\n"
+    assert "Set-Cookie" not in response.headers
+    redis_double.return_false = False
+    client.get("/set")
+    redis_double.fail = "delete"
+    response = client.get("/clear")
+    assert response.status_code == 503
+
+
+def test_subject_revision_revokes_bound_sessions(redis_double: RedisDouble) -> None:
+    app, interface = configured_app(redis_double, Clock())
+    client = app.test_client()
+    client.get("/set")
+    assert client.get("/bind").status_code == 200
+    assert client.get("/get").text == "private"
+    assert interface.revoke_identity("tenant-id", "object-id") == 1
+    assert client.get("/get").text == "missing"
+
+
+def test_regenerate_rotates_loaded_session_atomically(redis_double: RedisDouble) -> None:
+    app, interface = configured_app(redis_double, Clock())
+
+    @app.get("/rotate")
+    def rotate() -> str:
+        interface.regenerate(app, session)
+        return "rotated"
+
+    client = app.test_client()
+    client.get("/set")
+    before = client.get_cookie("test_session")
+    response = client.get("/rotate")
+    after = client.get_cookie("test_session")
+    assert response.status_code == 200
+    assert before is not None and after is not None and before.value != after.value
+    assert len(redis_double.values) == 1
+
+
+def test_invalid_interface_inputs_and_clock_are_rejected(redis_double: RedisDouble) -> None:
+    app, interface = configured_app(redis_double, Clock())
+    with pytest.raises(TypeError, match="RedisSession"):
+        interface.save_session(app, object(), Response())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="RedisSession"):
+        interface.regenerate(app, object())  # type: ignore[arg-type]
+    with pytest.raises(SessionBackendError, match="stateless"):
+        interface.regenerate(
+            app,
+            RedisSession({}, sid="s" * 32, new=True, stateless=True),
+        )
+    bad_clock = Clock()
+    bad_clock.value = float("nan")
+    _, bad_interface = session_app(redis_double, clock=bad_clock)
+    with app.test_request_context("/") as context, pytest.raises(
+        SessionBackendError,
+        match="clock",
+    ):
+        bad_interface.open_session(app, context.request)
+
+
+@pytest.mark.parametrize(
+    ("key_prefix", "revocation_prefix"),
+    [
+        ("bad", "valid:revocation:"),
+        ("valid:session:", "bad space:"),
+        ("same:", "same:"),
+    ],
+)
+def test_interface_prefixes_are_validated(
+    redis_double: RedisDouble,
+    key_prefix: str,
+    revocation_prefix: str,
+) -> None:
+    _, valid = session_app(redis_double, clock=Clock())
+    with pytest.raises((TypeError, ValueError)):
+        RedisSessionInterface(
+            redis_double,
+            codec=valid._codec,  # type: ignore[attr-defined]
+            key_prefix=key_prefix,
+            revocation_prefix=revocation_prefix,
+        )

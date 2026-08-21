@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}{{ app_display_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=asset_version) }}">
+</head>
+<body>
+  {% include "components/navbar.html" %}
+  <main class="container" id="main-content">
+    {% include "components/flash_messages.html" %}
+    {% block content %}{% endblock %}
+  </main>
+  {% include "components/footer.html" %}
+  <script src="{{ url_for('static', filename='js/app.js', v=asset_version) }}" defer></script>
+</body>
+</html>

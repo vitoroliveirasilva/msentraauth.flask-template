@@ -1,0 +1,745 @@
+from __future__ import annotations
+
+import base64
+import binascii
+import os
+import re
+import stat
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from ipaddress import ip_address
+from math import isfinite
+from pathlib import Path
+from typing import Final
+from urllib.parse import SplitResult, parse_qsl, urlsplit
+from uuid import UUID
+
+from redis import Redis
+
+from .infrastructure.session_envelope import SessionEnvelopeCodec
+
+_ENVIRONMENTS: Final = frozenset({"development", "testing", "production"})
+_LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
+_LOG_FORMATS: Final = frozenset({"json", "text"})
+_MAX_SECRET_FILE_BYTES: Final = 16 * 1024
+_MAX_SECRET_CHARACTERS: Final = 4096
+_MAX_CA_FILE_BYTES: Final = 1024 * 1024
+_MAX_SESSION_KEYS: Final = 5
+_MAX_TIMEOUT_SECONDS: Final = 30.0
+_MAX_SESSION_LIFETIME_SECONDS: Final = 86_400
+_MAX_ABSOLUTE_TIMEOUT_SECONDS: Final = 7 * 86_400
+_MAX_CLOCK_SKEW_SECONDS: Final = 300
+_MAX_NAMESPACE_CHARACTERS: Final = 64
+_NAMESPACE_RE: Final = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+_HOST_LABEL_RE: Final = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_BASE64URL_RE: Final = re.compile(r"^[A-Za-z0-9_-]+={0,2}$")
+_CALLBACK_PATH_RE: Final = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$")
+_POLICY_FEATURE_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_SCOPE_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
+_REDIS_CONTROLLED_QUERY_OPTIONS: Final = frozenset(
+    {
+        "decode_responses",
+        "encoding",
+        "encoding_errors",
+        "health_check_interval",
+        "socket_connect_timeout",
+        "socket_timeout",
+        "ssl_cert_reqs",
+        "ssl_check_hostname",
+    }
+)
+{% if include_graph_example %}_GRAPH_BASE_URLS: Final = frozenset({"https://graph.microsoft.com/v1.0"})
+{% endif %}
+
+
+class SettingsError(ValueError):
+    """Raised when configuration is missing, malformed, or unsafe."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyHops:
+    x_for: int = 0
+    x_proto: int = 0
+    x_host: int = 0
+    x_port: int = 0
+    x_prefix: int = 0
+
+    @property
+    def any_enabled(self) -> bool:
+        return any((self.x_for, self.x_proto, self.x_host, self.x_port, self.x_prefix))
+
+
+@dataclass(frozen=True, slots=True)
+class AppSettings:
+    app_name: str
+    app_slug: str
+    environment: str
+    base_url: str
+    trusted_hosts: tuple[str, ...]
+    log_level: str
+    log_format: str
+    asset_version: str
+    secret_key: str
+    csrf_secret_key: str
+    session_signing_keys: tuple[str, ...]
+    session_payload_keys: tuple[str, ...]
+    client_id: str
+    client_secret: str
+    tenant_id: str
+    redirect_uri: str
+    scopes: tuple[str, ...]
+    post_login_redirect_uri: str
+    post_logout_redirect_uri: str
+    redis_url: str
+    redis_tls_required: bool
+    redis_socket_connect_timeout: float
+    redis_socket_timeout: float
+    redis_health_check_interval: int
+    redis_ca_certs_file: str
+    session_namespace: str
+    session_lifetime_seconds: int
+    session_absolute_timeout_seconds: int
+    session_sid_renewal_seconds: int
+    session_clock_skew_seconds: int
+    session_activity_update_seconds: int
+    session_refresh_each_request: bool
+    session_allowed_keys: tuple[str, ...]
+    session_schema_strict: bool
+    cookie_secure: bool
+    cookie_samesite: str
+    csp_script_src_extra: tuple[str, ...]
+    csp_style_src_extra: tuple[str, ...]
+    csp_connect_src_extra: tuple[str, ...]
+    csp_img_src_extra: tuple[str, ...]
+    permissions_policy_features: tuple[str, ...]
+    proxy_hops: ProxyHops
+    testing: bool
+    csrf_enabled: bool
+    debug: bool
+    graph_enabled: bool = {% if include_graph_example %}True{% else %}False{% endif %}
+{% if include_graph_example %}    graph_base_url: str = "https://graph.microsoft.com/v1.0"
+    graph_connect_timeout: float = 3.05
+    graph_read_timeout: float = 10.0
+    graph_max_response_bytes: int = 64 * 1024
+    graph_max_retries: int = 2
+    graph_max_retry_after_seconds: int = 30
+{% endif %}
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> AppSettings:
+        values = os.environ if environ is None else environ
+        environment = _choice(_text(values, "APP_ENV", "production").lower(), "APP_ENV", _ENVIRONMENTS)
+        app_slug = _slug(_text(values, "APP_SLUG", "{{ project_slug }}"))
+        testing = _boolean(values, "TESTING", environment == "testing")
+        debug = _boolean(values, "DEBUG", environment == "development")
+        csrf_enabled = _boolean(values, "WTF_CSRF_ENABLED", not testing)
+        secret_key = _secret(values, "APP_SECRET_KEY", environment=environment, cryptographic=True)
+        signing_keys = _secret_ring(values, "SESSION_SIGNING_KEYS", environment=environment)
+        payload_keys = _secret_ring(values, "SESSION_PAYLOAD_KEYS", environment=environment)
+        csrf_secret = _secret(values, "WTF_CSRF_SECRET_KEY", environment=environment, cryptographic=True)
+        base_url = _base_url(_text(values, "APP_BASE_URL"))
+        redirect_uri = _redirect_uri(_text(values, "MS_ENTRA_REDIRECT_URI"))
+        redis_tls_required = _boolean(values, "REDIS_TLS_REQUIRED", environment == "production")
+        namespace = _optional_text(values, "SESSION_NAMESPACE") or f"{app_slug}:{environment}"
+        scopes = _scopes(
+            _csv(
+                values,
+                "MS_ENTRA_SCOPES",
+                "User.Read",
+            )
+        )
+{% if include_graph_example %}        if "User.Read" not in scopes:
+            raise SettingsError("MS_ENTRA_SCOPES must include User.Read when the Graph example is enabled")
+{% endif %}
+        settings = cls(
+            app_name=_text(values, "APP_NAME", {{ app_display_name|tojson }}, maximum=80),
+            app_slug=app_slug,
+            environment=environment,
+            base_url=base_url,
+            trusted_hosts=_trusted_hosts(_csv(values, "APP_TRUSTED_HOSTS", "localhost,127.0.0.1")),
+            log_level=_choice(_text(values, "APP_LOG_LEVEL", "INFO").upper(), "APP_LOG_LEVEL", _LOG_LEVELS),
+            log_format=_choice(_text(values, "APP_LOG_FORMAT", "json" if environment == "production" else "text"), "APP_LOG_FORMAT", _LOG_FORMATS),
+            asset_version=_text(values, "APP_ASSET_VERSION", "dev", maximum=128),
+            secret_key=secret_key,
+            csrf_secret_key=csrf_secret,
+            session_signing_keys=signing_keys or (secret_key,),
+            session_payload_keys=payload_keys or (secret_key,),
+            client_id=_client_id(_text(values, "MS_ENTRA_CLIENT_ID"), environment),
+            client_secret=_secret(values, "MS_ENTRA_CLIENT_SECRET", environment=environment, cryptographic=False, minimum=24),
+            tenant_id=_tenant_id(_text(values, "MS_ENTRA_TENANT_ID")),
+            redirect_uri=redirect_uri,
+            scopes=scopes,
+            post_login_redirect_uri=_local_path(_text(values, "MS_ENTRA_POST_LOGIN_REDIRECT_URI", "/"), "MS_ENTRA_POST_LOGIN_REDIRECT_URI"),
+            post_logout_redirect_uri=_local_path(_text(values, "MS_ENTRA_POST_LOGOUT_REDIRECT_URI", "/login"), "MS_ENTRA_POST_LOGOUT_REDIRECT_URI"),
+            redis_url=_redis_url(_secret_raw(values, "REDIS_URL", required=True), redis_tls_required),
+            redis_tls_required=redis_tls_required,
+            redis_socket_connect_timeout=_positive_float(values, "REDIS_CONNECT_TIMEOUT_SECONDS", 3.0),
+            redis_socket_timeout=_positive_float(values, "REDIS_READ_TIMEOUT_SECONDS", 3.0),
+            redis_health_check_interval=_non_negative_int(values, "REDIS_HEALTH_CHECK_INTERVAL_SECONDS", 30, 300),
+            redis_ca_certs_file=_regular_file(values.get("REDIS_CA_CERTS_FILE", ""), "REDIS_CA_CERTS_FILE"),
+            session_namespace=_namespace(namespace),
+            session_lifetime_seconds=_positive_int(values, "SESSION_LIFETIME_SECONDS", 3600, _MAX_SESSION_LIFETIME_SECONDS),
+            session_absolute_timeout_seconds=_positive_int(values, "SESSION_ABSOLUTE_TIMEOUT_SECONDS", 28_800, _MAX_ABSOLUTE_TIMEOUT_SECONDS),
+            session_sid_renewal_seconds=_positive_int(values, "SESSION_SID_RENEWAL_SECONDS", 900, _MAX_SESSION_LIFETIME_SECONDS),
+            session_clock_skew_seconds=_non_negative_int(values, "SESSION_CLOCK_SKEW_SECONDS", 30, _MAX_CLOCK_SKEW_SECONDS),
+            session_activity_update_seconds=_positive_int(values, "SESSION_ACTIVITY_UPDATE_SECONDS", 60, _MAX_SESSION_LIFETIME_SECONDS),
+            session_refresh_each_request=_boolean(values, "SESSION_REFRESH_EACH_REQUEST", True),
+            session_allowed_keys=_csv(values, "SESSION_ALLOWED_KEYS", ""),
+            session_schema_strict=_boolean(values, "SESSION_SCHEMA_STRICT", True),
+            cookie_secure=_boolean(values, "SESSION_COOKIE_SECURE", environment == "production"),
+            cookie_samesite=_samesite(_text(values, "SESSION_COOKIE_SAMESITE", "Lax")),
+            csp_script_src_extra=_csp_origins(_csv(values, "CSP_SCRIPT_SRC_EXTRA", ""), "CSP_SCRIPT_SRC_EXTRA"),
+            csp_style_src_extra=_csp_origins(_csv(values, "CSP_STYLE_SRC_EXTRA", ""), "CSP_STYLE_SRC_EXTRA"),
+            csp_connect_src_extra=_csp_origins(_csv(values, "CSP_CONNECT_SRC_EXTRA", ""), "CSP_CONNECT_SRC_EXTRA"),
+            csp_img_src_extra=_csp_origins(_csv(values, "CSP_IMG_SRC_EXTRA", ""), "CSP_IMG_SRC_EXTRA"),
+            permissions_policy_features=_policy_features(
+                _csv(
+                    values,
+                    "PERMISSIONS_POLICY_FEATURES",
+                    "camera,geolocation,microphone,payment,usb",
+                )
+            ),
+            proxy_hops=ProxyHops(
+                x_for=_non_negative_int(values, "PROXY_X_FOR", 0, 5),
+                x_proto=_non_negative_int(values, "PROXY_X_PROTO", 0, 5),
+                x_host=_non_negative_int(values, "PROXY_X_HOST", 0, 5),
+                x_port=_non_negative_int(values, "PROXY_X_PORT", 0, 5),
+                x_prefix=_non_negative_int(values, "PROXY_X_PREFIX", 0, 5),
+            ),
+            testing=testing,
+            csrf_enabled=csrf_enabled,
+            debug=debug,
+{% if include_graph_example %}            graph_base_url=_graph_base_url(_text(values, "GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0")),
+            graph_connect_timeout=_positive_float(values, "GRAPH_CONNECT_TIMEOUT_SECONDS", 3.05),
+            graph_read_timeout=_positive_float(values, "GRAPH_READ_TIMEOUT_SECONDS", 10.0),
+            graph_max_response_bytes=_positive_int(values, "GRAPH_MAX_RESPONSE_BYTES", 64 * 1024, 256 * 1024),
+            graph_max_retries=_non_negative_int(values, "GRAPH_MAX_RETRIES", 2, 3),
+            graph_max_retry_after_seconds=_positive_int(values, "GRAPH_MAX_RETRY_AFTER_SECONDS", 30, 120),
+{% endif %}        )
+        settings.validate()
+        return settings
+
+    @property
+    def session_key_prefix(self) -> str:
+        return f"{self.session_namespace}:session:"
+
+    @property
+    def auth_storage_key_prefix(self) -> str:
+        return f"{self.session_namespace}:auth:"
+
+    @property
+    def revocation_key_prefix(self) -> str:
+        return f"{self.session_namespace}:revocation:"
+
+    def create_session_codec(self) -> SessionEnvelopeCodec:
+        return SessionEnvelopeCodec(
+            self.session_payload_keys,
+            namespace=self.session_namespace,
+            idle_timeout_seconds=self.session_lifetime_seconds,
+            absolute_timeout_seconds=self.session_absolute_timeout_seconds,
+            sid_renewal_seconds=self.session_sid_renewal_seconds,
+            clock_skew_seconds=self.session_clock_skew_seconds,
+            allowed_keys=self.session_allowed_keys,
+            strict_schema=self.session_schema_strict,
+        )
+
+    def create_redis_client(self) -> Redis:
+        options: dict[str, object] = {
+            "decode_responses": False,
+            "socket_connect_timeout": self.redis_socket_connect_timeout,
+            "socket_timeout": self.redis_socket_timeout,
+            "health_check_interval": self.redis_health_check_interval,
+        }
+        if self.redis_tls_required:
+            options.update(ssl_cert_reqs="required", ssl_check_hostname=True)
+            if self.redis_ca_certs_file:
+                options["ssl_ca_certs"] = self.redis_ca_certs_file
+        return Redis.from_url(self.redis_url, **options)
+
+    def flask_config(self) -> dict[str, object]:
+        production = self.environment == "production"
+        cookie_token = self.app_slug.replace("-", "_")
+        return {
+            "ENV": self.environment,
+            "TESTING": self.testing,
+            "DEBUG": self.debug,
+            "SECRET_KEY": self.secret_key,
+            "SESSION_SIGNING_KEYS": self.session_signing_keys,
+            "SESSION_PAYLOAD_KEYS": self.session_payload_keys,
+            "SESSION_NAMESPACE": self.session_namespace,
+            "SESSION_IDLE_TIMEOUT_SECONDS": self.session_lifetime_seconds,
+            "SESSION_ABSOLUTE_TIMEOUT_SECONDS": self.session_absolute_timeout_seconds,
+            "SESSION_SID_RENEWAL_SECONDS": self.session_sid_renewal_seconds,
+            "SESSION_CLOCK_SKEW_SECONDS": self.session_clock_skew_seconds,
+            "SESSION_ACTIVITY_UPDATE_SECONDS": self.session_activity_update_seconds,
+            "SESSION_ALLOWED_KEYS": self.session_allowed_keys,
+            "SESSION_SCHEMA_STRICT": self.session_schema_strict,
+            "WTF_CSRF_SECRET_KEY": self.csrf_secret_key,
+            "TRUSTED_HOSTS": list(self.trusted_hosts),
+            "PREFERRED_URL_SCHEME": "https" if production else urlsplit(self.base_url).scheme,
+            "MAX_CONTENT_LENGTH": 1024 * 1024,
+            "MAX_FORM_MEMORY_SIZE": 256 * 1024,
+            "MAX_FORM_PARTS": 100,
+            "SESSION_PERMANENT": True,
+            "PERMANENT_SESSION_LIFETIME": self.session_lifetime_seconds,
+            "SESSION_REFRESH_EACH_REQUEST": self.session_refresh_each_request,
+            "SESSION_COOKIE_NAME": f"__Host-{cookie_token}_session" if production else f"{cookie_token}_session",
+            "SESSION_COOKIE_HTTPONLY": True,
+            "SESSION_COOKIE_SECURE": self.cookie_secure,
+            "SESSION_COOKIE_SAMESITE": self.cookie_samesite,
+            "SESSION_COOKIE_PATH": "/",
+            "SESSION_COOKIE_DOMAIN": None,
+            "WTF_CSRF_ENABLED": self.csrf_enabled,
+            "WTF_CSRF_TIME_LIMIT": self.session_lifetime_seconds,
+            "MS_ENTRA_CLIENT_ID": self.client_id,
+            "MS_ENTRA_CLIENT_SECRET": self.client_secret,
+            "MS_ENTRA_TENANT_ID": self.tenant_id,
+            "MS_ENTRA_REDIRECT_URI": self.redirect_uri,
+            "MS_ENTRA_SCOPES": list(self.scopes),
+            "MS_ENTRA_SESSION_NAMESPACE": self.session_namespace.replace(":", "_"),
+            "MS_ENTRA_TOKEN_CACHE_TTL": self.session_lifetime_seconds,
+            "MS_ENTRA_IDENTITY_TTL": self.session_lifetime_seconds,
+            "MS_ENTRA_FLOW_TTL": min(self.session_lifetime_seconds, 600),
+            "MS_ENTRA_REQUIRE_ATOMIC_STORAGE": True,
+            "MS_ENTRA_STRICT_SECURITY": production,
+            "MS_ENTRA_EVENT_LOGGING": True,
+            "MS_ENTRA_REQUEST_ID_HEADER": "X-Request-ID",
+            "MS_ENTRA_POST_LOGIN_REDIRECT_URI": self.post_login_redirect_uri,
+            "MS_ENTRA_POST_LOGOUT_REDIRECT_URI": self.post_logout_redirect_uri,
+            "SEND_FILE_MAX_AGE_DEFAULT": 31536000 if production else 0,
+            "TEMPLATES_AUTO_RELOAD": not production,
+        }
+
+    def validate(self) -> None:
+        if not isinstance(self.proxy_hops, ProxyHops) or any(
+            isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 5
+            for value in (
+                self.proxy_hops.x_for,
+                self.proxy_hops.x_proto,
+                self.proxy_hops.x_host,
+                self.proxy_hops.x_port,
+                self.proxy_hops.x_prefix,
+            )
+        ):
+            raise SettingsError("proxy hop counts must be integers between 0 and 5")
+        if self.session_absolute_timeout_seconds < self.session_lifetime_seconds:
+            raise SettingsError("SESSION_ABSOLUTE_TIMEOUT_SECONDS cannot be shorter than SESSION_LIFETIME_SECONDS")
+        if self.session_sid_renewal_seconds >= self.session_absolute_timeout_seconds:
+            raise SettingsError("SESSION_SID_RENEWAL_SECONDS must be shorter than the absolute timeout")
+        if self.session_activity_update_seconds > self.session_lifetime_seconds:
+            raise SettingsError("SESSION_ACTIVITY_UPDATE_SECONDS cannot exceed the idle timeout")
+        base = urlsplit(self.base_url)
+        redirect = urlsplit(self.redirect_uri)
+        if _origin(base) != _origin(redirect):
+            raise SettingsError("MS_ENTRA_REDIRECT_URI must use the same origin as APP_BASE_URL")
+        if self.cookie_samesite == "None" and not self.cookie_secure:
+            raise SettingsError("SESSION_COOKIE_SECURE must be true when SameSite=None")
+        try:
+            self.create_session_codec()
+        except (TypeError, ValueError) as exc:
+            raise SettingsError("session codec configuration is invalid") from exc
+{% if include_graph_example %}        if self.graph_enabled and "User.Read" not in self.scopes:
+            raise SettingsError(
+                "MS_ENTRA_SCOPES must include User.Read when the Graph example is enabled"
+            )
+{% endif %}
+        if self.environment == "production":
+            if base.scheme != "https" or not self.cookie_secure or not self.redis_tls_required:
+                raise SettingsError("production requires HTTPS, Secure cookies and Redis TLS")
+            if self.testing or self.debug or not self.csrf_enabled or not self.session_schema_strict:
+                raise SettingsError("production forbids testing/debug and requires CSRF + strict session schema")
+            secrets = (
+                self.secret_key,
+                self.csrf_secret_key,
+                self.client_secret,
+                *self.session_signing_keys,
+                *self.session_payload_keys,
+            )
+            if len(set(secrets)) != len(secrets):
+                raise SettingsError("production secrets must use independent values")
+
+
+def _text(
+    values: Mapping[str, str],
+    name: str,
+    default: str | None = None,
+    *,
+    maximum: int = _MAX_SECRET_CHARACTERS,
+) -> str:
+    raw = values.get(name, default)
+    if raw is None or not raw.strip():
+        raise SettingsError(f"{name} is required")
+    value = raw.strip()
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise SettingsError(f"{name} contains control characters")
+    if len(value) > maximum:
+        raise SettingsError(f"{name} exceeds the maximum length")
+    return value
+
+
+def _optional_text(values: Mapping[str, str], name: str) -> str:
+    raw = values.get(name, "").strip()
+    if len(raw) > _MAX_SECRET_CHARACTERS or any(
+        ord(character) < 32 or ord(character) == 127 for character in raw
+    ):
+        raise SettingsError(f"{name} is invalid")
+    return raw
+
+
+def _secret_raw(values: Mapping[str, str], name: str, *, required: bool) -> str:
+    direct = values.get(name, "").strip()
+    file_value = values.get(f"{name}_FILE", "").strip()
+    if direct and file_value:
+        raise SettingsError(f"{name} and {name}_FILE cannot be configured together")
+    if file_value:
+        path = Path(file_value)
+        if not path.is_absolute():
+            raise SettingsError(f"{name}_FILE must be an absolute path")
+        try:
+            meta = path.stat()
+            if not stat.S_ISREG(meta.st_mode) or meta.st_size > _MAX_SECRET_FILE_BYTES:
+                raise SettingsError(f"{name}_FILE must reference a small regular file")
+            value = path.read_text(encoding="utf-8").rstrip("\r\n")
+        except OSError as exc:
+            raise SettingsError(f"{name}_FILE could not be read") from exc
+        if not value:
+            raise SettingsError(f"{name}_FILE is empty")
+        if len(value) > _MAX_SECRET_CHARACTERS or any(
+            ord(character) < 32 or ord(character) == 127 for character in value
+        ):
+            raise SettingsError(f"{name}_FILE contains an invalid value")
+        return value
+    if direct:
+        if len(direct) > _MAX_SECRET_CHARACTERS or any(
+            ord(character) < 32 or ord(character) == 127 for character in direct
+        ):
+            raise SettingsError(f"{name} contains an invalid value")
+        return direct
+    if required:
+        raise SettingsError(f"{name} is required")
+    return ""
+
+
+def _secret(values: Mapping[str, str], name: str, *, environment: str, cryptographic: bool, minimum: int = 32) -> str:
+    value = _secret_raw(values, name, required=True)
+    if len(value) < minimum or len(value) > _MAX_SECRET_CHARACTERS:
+        raise SettingsError(f"{name} has an invalid length")
+    if environment == "production" and cryptographic:
+        _base64_secret(value, name)
+    if environment == "production" and not cryptographic and len(set(value)) < 8:
+        raise SettingsError(f"{name} does not have enough character diversity")
+    return value
+
+
+def _secret_ring(values: Mapping[str, str], name: str, *, environment: str) -> tuple[str, ...]:
+    raw = _secret_raw(values, name, required=environment == "production")
+    if not raw:
+        return ()
+    items = tuple(part.strip() for part in re.split(r"[,\r\n]+", raw) if part.strip())
+    if len(items) > _MAX_SESSION_KEYS or len(set(items)) != len(items):
+        raise SettingsError(f"{name} must contain one to five unique keys")
+    for item in items:
+        if len(item) < 32:
+            raise SettingsError(f"{name} keys must contain at least 32 characters")
+        if environment == "production":
+            _base64_secret(item, name)
+    return items
+
+
+def _base64_secret(value: str, name: str) -> None:
+    if not _BASE64URL_RE.fullmatch(value):
+        raise SettingsError(f"{name} must be URL-safe base64 in production")
+    try:
+        decoded = base64.urlsafe_b64decode((value + "=" * (-len(value) % 4)).encode("ascii"))
+    except (UnicodeError, binascii.Error, ValueError) as exc:
+        raise SettingsError(f"{name} must be URL-safe base64 in production") from exc
+    if len(decoded) < 32:
+        raise SettingsError(f"{name} must encode at least 32 random bytes in production")
+
+
+def _boolean(values: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = values.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise SettingsError(f"{name} must be boolean")
+
+
+def _csv(values: Mapping[str, str], name: str, default: str) -> tuple[str, ...]:
+    raw = values.get(name, default)
+    return tuple(dict.fromkeys(part.strip() for part in raw.split(",") if part.strip()))
+
+
+def _choice(value: str, name: str, allowed: frozenset[str]) -> str:
+    if value not in allowed:
+        raise SettingsError(f"{name} must be one of: {', '.join(sorted(allowed))}")
+    return value
+
+
+def _positive_int(values: Mapping[str, str], name: str, default: int, maximum: int) -> int:
+    value = _non_negative_int(values, name, default, maximum)
+    if value == 0:
+        raise SettingsError(f"{name} must be positive")
+    return value
+
+
+def _non_negative_int(values: Mapping[str, str], name: str, default: int, maximum: int) -> int:
+    try:
+        value = int(values.get(name, str(default)))
+    except ValueError as exc:
+        raise SettingsError(f"{name} must be an integer") from exc
+    if value < 0 or value > maximum:
+        raise SettingsError(f"{name} must be between 0 and {maximum}")
+    return value
+
+
+def _positive_float(values: Mapping[str, str], name: str, default: float) -> float:
+    try:
+        value = float(values.get(name, str(default)))
+    except ValueError as exc:
+        raise SettingsError(f"{name} must be numeric") from exc
+    if not isfinite(value) or value <= 0 or value > _MAX_TIMEOUT_SECONDS:
+        raise SettingsError(f"{name} must be a finite positive value <= {_MAX_TIMEOUT_SECONDS:g}")
+    return value
+
+
+def _slug(value: str) -> str:
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
+        raise SettingsError("APP_SLUG must use lowercase kebab-case")
+    return value
+
+
+def _namespace(value: str) -> str:
+    if len(value) > _MAX_NAMESPACE_CHARACTERS or not _NAMESPACE_RE.fullmatch(value):
+        raise SettingsError("SESSION_NAMESPACE contains unsupported characters")
+    return value
+
+
+def _base_url(value: str) -> str:
+    parsed = _web_url(value, "APP_BASE_URL")
+    if parsed.query or parsed.path not in {"", "/"}:
+        raise SettingsError("APP_BASE_URL must contain only the origin")
+    return _canonical_origin(parsed)
+
+
+def _redirect_uri(value: str) -> str:
+    parsed = _web_url(value, "MS_ENTRA_REDIRECT_URI")
+    if (
+        parsed.query
+        or "%" in parsed.path
+        or not _CALLBACK_PATH_RE.fullmatch(parsed.path)
+        or parsed.path in {"", "/"}
+        or parsed.path.endswith("/")
+    ):
+        raise SettingsError("MS_ENTRA_REDIRECT_URI must use a static non-root callback path")
+    if "//" in parsed.path or any(part in {".", ".."} for part in parsed.path.split("/")):
+        raise SettingsError("MS_ENTRA_REDIRECT_URI contains an ambiguous path")
+    return value
+
+
+def _web_url(value: str, name: str) -> SplitResult:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        raise SettingsError(f"{name} must be an absolute safe URL")
+    if parsed.scheme == "http" and not _is_loopback(parsed.hostname):
+        raise SettingsError(f"{name} must use HTTPS outside loopback")
+    _canonical_hostname(parsed.hostname, name)
+    try:
+        if parsed.port == 0:
+            raise SettingsError(f"{name} contains an invalid port")
+    except ValueError as exc:
+        raise SettingsError(f"{name} contains an invalid port") from exc
+    return parsed
+
+
+def _canonical_origin(parsed: SplitResult) -> str:
+    host = _canonical_hostname(parsed.hostname or "", "APP_BASE_URL")
+    rendered = f"[{host}]" if ":" in host else host
+    default_port = 443 if parsed.scheme == "https" else 80
+    authority = rendered if parsed.port in {None, default_port} else f"{rendered}:{parsed.port}"
+    return f"{parsed.scheme}://{authority}"
+
+
+def _trusted_hosts(values: Sequence[str]) -> tuple[str, ...]:
+    result: list[str] = []
+    for value in values:
+        if "*" in value or value.startswith(".") or any(token in value for token in ("://", "/", "@", "?", "#")):
+            raise SettingsError("APP_TRUSTED_HOSTS must contain exact hosts only")
+        host = value
+        port: int | None = None
+        if value.startswith("["):
+            closing = value.find("]")
+            if closing < 0:
+                raise SettingsError("APP_TRUSTED_HOSTS contains an invalid IPv6 host")
+            host = value[1:closing]
+            suffix = value[closing + 1 :]
+            if suffix:
+                if not suffix.startswith(":") or not suffix[1:].isdigit():
+                    raise SettingsError("APP_TRUSTED_HOSTS contains an invalid port")
+                port = int(suffix[1:])
+        elif value.count(":") == 1:
+            candidate, raw_port = value.rsplit(":", 1)
+            if raw_port.isdigit():
+                host, port = candidate, int(raw_port)
+        canonical = _canonical_hostname(host, "APP_TRUSTED_HOSTS")
+        rendered = f"[{canonical}]" if ":" in canonical else canonical
+        if port is not None:
+            if not 1 <= port <= 65535:
+                raise SettingsError("APP_TRUSTED_HOSTS contains an invalid port")
+            rendered = f"{rendered}:{port}"
+        if rendered not in result:
+            result.append(rendered)
+    if not result:
+        raise SettingsError("APP_TRUSTED_HOSTS must not be empty")
+    return tuple(result)
+
+
+def _canonical_hostname(hostname: str, name: str) -> str:
+    normalized = hostname.lower().rstrip(".")
+    try:
+        return ip_address(normalized).compressed
+    except ValueError:
+        pass
+    try:
+        ascii_host = normalized.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise SettingsError(f"{name} contains an invalid host") from exc
+    if not ascii_host or len(ascii_host) > 253 or any(not _HOST_LABEL_RE.fullmatch(label) for label in ascii_host.split(".")):
+        raise SettingsError(f"{name} contains an invalid host")
+    return ascii_host
+
+
+def _client_id(value: str, environment: str) -> str:
+    try:
+        return str(UUID(value))
+    except ValueError as exc:
+        if environment == "production":
+            raise SettingsError("MS_ENTRA_CLIENT_ID must be a UUID in production") from exc
+        return value
+
+
+def _tenant_id(value: str) -> str:
+    normalized = value.lower()
+    if normalized in {"common", "consumers", "organizations"}:
+        raise SettingsError("MS_ENTRA_TENANT_ID must identify one tenant")
+    try:
+        return str(UUID(normalized))
+    except ValueError:
+        return _canonical_hostname(normalized, "MS_ENTRA_TENANT_ID")
+
+
+def _local_path(value: str, name: str) -> str:
+    parsed = urlsplit(value)
+    if (
+        not value.startswith("/")
+        or value.startswith("//")
+        or "\\" in value
+        or "%" in value
+        or parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or "//" in parsed.path
+        or any(part in {".", ".."} for part in parsed.path.split("/"))
+    ):
+        raise SettingsError(f"{name} must be an application-local path")
+    return value
+
+
+def _redis_url(value: str, tls_required: bool) -> str:
+    if len(value) > _MAX_SECRET_CHARACTERS or any(
+        ord(character) < 32 or ord(character) == 127 for character in value
+    ):
+        raise SettingsError("REDIS_URL contains an invalid value")
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname or parsed.fragment:
+        raise SettingsError("REDIS_URL must be an absolute redis/rediss URL")
+    controlled = {key.casefold() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)} & _REDIS_CONTROLLED_QUERY_OPTIONS
+    if controlled:
+        raise SettingsError(f"REDIS_URL cannot override application-controlled options: {', '.join(sorted(controlled))}")
+    if tls_required and parsed.scheme != "rediss":
+        raise SettingsError("REDIS_URL must use rediss when REDIS_TLS_REQUIRED=true")
+    return value
+
+
+def _regular_file(value: object, name: str) -> str:
+    if value == "":
+        return ""
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise SettingsError(f"{name} must reference an absolute regular file")
+    try:
+        metadata = Path(value).stat()
+    except OSError as exc:
+        raise SettingsError(f"{name} could not be inspected") from exc
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_CA_FILE_BYTES:
+        raise SettingsError(f"{name} must reference a small regular file")
+    return value
+
+
+def _samesite(value: str) -> str:
+    normalized = value.capitalize()
+    if normalized not in {"Lax", "Strict", "None"}:
+        raise SettingsError("SESSION_COOKIE_SAMESITE must be Lax, Strict, or None")
+    return normalized
+
+
+def _csp_origins(values: Sequence[str], name: str) -> tuple[str, ...]:
+    safe: list[str] = []
+    for value in values:
+        if value in {"'unsafe-inline'", "'unsafe-eval'", "*"}:
+            raise SettingsError(f"{name} cannot weaken CSP with {value}")
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise SettingsError(f"{name} accepts explicit HTTPS origins only")
+        safe.append(_canonical_origin(parsed))
+    return tuple(dict.fromkeys(safe))
+
+
+def _scopes(values: Sequence[str]) -> tuple[str, ...]:
+    if len(values) > 32 or any(not _SCOPE_RE.fullmatch(value) for value in values):
+        raise SettingsError("MS_ENTRA_SCOPES contains an invalid scope")
+    return tuple(values)
+
+
+def _policy_features(values: Sequence[str]) -> tuple[str, ...]:
+    if len(values) > 32 or any(
+        not _POLICY_FEATURE_RE.fullmatch(value) for value in values
+    ):
+        raise SettingsError("PERMISSIONS_POLICY_FEATURES contains an invalid feature")
+    return tuple(values)
+
+
+def _origin(parsed: SplitResult) -> tuple[str, str, int]:
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return parsed.scheme.lower(), _canonical_hostname(parsed.hostname or "", "URL"), port
+
+
+def _is_loopback(hostname: str | None) -> bool:
+    normalized = (hostname or "").lower().rstrip(".")
+    if normalized == "localhost":
+        return True
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+{% if include_graph_example %}
+def _graph_base_url(value: str) -> str:
+    canonical = value.rstrip("/")
+    if canonical not in _GRAPH_BASE_URLS:
+        raise SettingsError("GRAPH_BASE_URL must use an approved Microsoft Graph endpoint")
+    return canonical
+{% endif %}
+
+__all__ = ["AppSettings", "ProxyHops", "SettingsError"]

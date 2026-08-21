@@ -1,0 +1,251 @@
+from __future__ import annotations
+
+import base64
+from collections.abc import Mapping, Sequence
+from threading import RLock
+from typing import Any
+
+import pytest
+from flask import Flask
+from flask_ms_entra_auth.auth.protocols import MsalAccount, MsalResult
+from msal import SerializableTokenCache  # type: ignore[import-untyped]
+
+from {{ package_name }}.infrastructure.session_backend import RedisSessionInterface
+from {{ package_name }}.infrastructure.session_envelope import SessionEnvelopeCodec
+from {{ package_name }}.settings import AppSettings
+
+
+def cryptographic_key(seed: int) -> str:
+    material = bytes((seed + index) % 256 for index in range(32))
+    return base64.urlsafe_b64encode(material).decode("ascii").rstrip("=")
+
+
+class RedisDouble:
+    def __init__(self) -> None:
+        self.values: dict[str, bytes] = {}
+        self.fail: str | None = None
+        self.return_false = False
+        self.return_invalid = False
+        self.ping_result: object = True
+        self._lock = RLock()
+
+    def get(self, name: str) -> bytes | None:
+        if self.fail == "get":
+            raise RuntimeError("redis-secret")
+        if self.return_invalid:
+            return "invalid"  # type: ignore[return-value]
+        return self.values.get(name)
+
+    def set(
+        self,
+        name: str,
+        value: bytes,
+        ex: int | None = None,
+        *,
+        nx: bool = False,
+        xx: bool = False,
+    ) -> object:
+        del ex
+        if self.fail == "set":
+            raise RuntimeError("redis-secret")
+        if self.return_false:
+            return False
+        exists = name in self.values
+        if (nx and exists) or (xx and not exists):
+            return None
+        self.values[name] = bytes(value)
+        return True
+
+    def delete(self, *names: str) -> int:
+        if self.fail == "delete":
+            raise RuntimeError("redis-secret")
+        removed = 0
+        for name in names:
+            if name in self.values:
+                removed += 1
+                del self.values[name]
+        return removed
+
+    def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:
+        if self.fail == "eval":
+            raise RuntimeError("redis-secret")
+        with self._lock:
+            keys = tuple(str(value) for value in keys_and_args[:numkeys])
+            args = keys_and_args[numkeys:]
+            if "9223372036854775806" in script:
+                current = self.values.get(keys[0])
+                try:
+                    revision = 0 if current is None else int(current.decode("ascii"))
+                except (UnicodeError, ValueError):
+                    return -1
+                if revision < 0 or revision >= 2**63 - 2:
+                    return -1
+                revision += 1
+                self.values[keys[0]] = str(revision).encode("ascii")
+                return revision
+            if numkeys == 2 and "EXISTS" in script:
+                old_key, new_key = keys
+                stored = self.values.get(old_key)
+                expected, new_value, _ttl = args
+                if stored is None:
+                    return 0
+                if stored != expected:
+                    return -2
+                if new_key in self.values:
+                    return -1
+                self.values[new_key] = bytes(new_value)  # type: ignore[arg-type]
+                del self.values[old_key]
+                return 1
+            stored = self.values.get(keys[0])
+            if "current ~= ARGV[1]" in script:
+                if stored is None:
+                    return 1
+                if not args or stored != args[0]:
+                    return 0
+                del self.values[keys[0]]
+                return 1
+            if stored is not None:
+                del self.values[keys[0]]
+            return stored
+
+    def ping(self) -> object:
+        if self.fail == "ping":
+            raise RuntimeError("redis-secret")
+        return self.ping_result
+
+
+class FakeMsalClient:
+    def __init__(self) -> None:
+        self.cache: SerializableTokenCache | None = None
+        self.accounts: Sequence[MsalAccount] = [
+            {
+                "home_account_id": "home-id",
+                "local_account_id": "object-id",
+                "realm": "tenant-id",
+            }
+        ]
+
+    def initiate_auth_code_flow(
+        self,
+        scopes: list[str],
+        *,
+        redirect_uri: str,
+        state: str,
+    ) -> MsalResult:
+        del scopes
+        return {
+            "auth_uri": f"https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize?state={state}",
+            "state": state,
+            "nonce": "nonce",
+            "redirect_uri": redirect_uri,
+        }
+
+    def acquire_token_by_auth_code_flow(
+        self,
+        auth_code_flow: Mapping[str, object],
+        auth_response: Mapping[str, str],
+    ) -> MsalResult:
+        assert auth_code_flow["state"] == auth_response["state"]
+        return {
+            "id_token_claims": {
+                "oid": "object-id",
+                "tid": "tenant-id",
+                "name": "Test User",
+                "preferred_username": "user@example.test",
+            }
+        }
+
+    def get_accounts(self, username: str | None = None) -> Sequence[MsalAccount]:
+        del username
+        return self.accounts
+
+    def acquire_token_silent_with_error(
+        self,
+        scopes: list[str],
+        account: MsalAccount,
+        *,
+        force_refresh: bool = False,
+    ) -> MsalResult | None:
+        del scopes, account, force_refresh
+        return {"access_token": "server-only-token"}
+
+
+def valid_env(**overrides: str) -> dict[str, str]:
+    values = {
+        "APP_ENV": "testing",
+        "APP_NAME": "Test App",
+        "APP_SLUG": "test-app",
+        "APP_SECRET_KEY": cryptographic_key(1),
+        "WTF_CSRF_SECRET_KEY": cryptographic_key(2),
+        "SESSION_SIGNING_KEYS": cryptographic_key(3),
+        "SESSION_PAYLOAD_KEYS": cryptographic_key(4),
+        "APP_BASE_URL": "http://localhost:5000",
+        "APP_TRUSTED_HOSTS": "localhost,127.0.0.1,[::1]",
+        "MS_ENTRA_CLIENT_ID": "client-id",
+        "MS_ENTRA_CLIENT_SECRET": "client-secret-with-diversity-123456",
+        "MS_ENTRA_TENANT_ID": "tenant.example.test",
+        "MS_ENTRA_REDIRECT_URI": "http://localhost:5000/auth/callback",
+        "MS_ENTRA_SCOPES": "User.Read",
+        "REDIS_URL": "redis://localhost:6379/0",
+        "REDIS_TLS_REQUIRED": "false",
+        "SESSION_ALLOWED_KEYS": "value,counter",
+        "WTF_CSRF_ENABLED": "false",
+        "SESSION_COOKIE_SECURE": "false",
+    }
+    values.update(overrides)
+    return values
+
+
+@pytest.fixture
+def redis_double() -> RedisDouble:
+    return RedisDouble()
+
+
+@pytest.fixture
+def settings() -> AppSettings:
+    return AppSettings.from_env(valid_env())
+
+
+@pytest.fixture
+def msal_factory() -> Any:
+    client = FakeMsalClient()
+
+    def factory(_config: object, cache: SerializableTokenCache) -> FakeMsalClient:
+        client.cache = cache
+        return client
+
+    return factory
+
+
+def session_app(redis: RedisDouble, *, clock: Any) -> tuple[Flask, RedisSessionInterface]:
+    app = Flask("session-test")
+    app.config.from_mapping(
+        SECRET_KEY=cryptographic_key(10),
+        SESSION_SIGNING_KEYS=(cryptographic_key(11),),
+        SESSION_COOKIE_NAME="test_session",
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SECURE=False,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_PERMANENT=True,
+        SESSION_REFRESH_EACH_REQUEST=False,
+        SESSION_ACTIVITY_UPDATE_SECONDS=60,
+    )
+    codec = SessionEnvelopeCodec(
+        (cryptographic_key(12),),
+        namespace="test:session",
+        idle_timeout_seconds=120,
+        absolute_timeout_seconds=600,
+        sid_renewal_seconds=30,
+        clock_skew_seconds=5,
+        allowed_keys=("value",),
+        strict_schema=True,
+    )
+    interface = RedisSessionInterface(
+        redis,
+        codec=codec,
+        key_prefix="test:session:data:",
+        revocation_prefix="test:session:revocation:",
+        clock=clock,
+    )
+    app.session_interface = interface
+    return app, interface

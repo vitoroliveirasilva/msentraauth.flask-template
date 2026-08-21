@@ -1,0 +1,10 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ status_code }} · {{ app_display_name }}{% endblock %}
+{% block content %}
+<section class="card">
+  <p class="eyebrow">Erro {{ status_code }}</p>
+  <h1>{{ title }}</h1>
+  <p>{{ message }}</p>
+  {% if request_id %}<p><small>ID da requisição: <code>{{ request_id }}</code></small></p>{% endif %}
+</section>
+{% endblock %}

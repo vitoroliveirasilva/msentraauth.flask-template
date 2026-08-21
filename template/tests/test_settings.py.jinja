@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from conftest import cryptographic_key, valid_env
+from {{ package_name }}.settings import AppSettings, ProxyHops, SettingsError
+
+
+def production_env() -> dict[str, str]:
+    return valid_env(
+        APP_ENV="production",
+        APP_BASE_URL="https://app.example.test",
+        APP_TRUSTED_HOSTS="app.example.test",
+        APP_SECRET_KEY=cryptographic_key(10),
+        WTF_CSRF_SECRET_KEY=cryptographic_key(11),
+        SESSION_SIGNING_KEYS=cryptographic_key(12),
+        SESSION_PAYLOAD_KEYS=cryptographic_key(13),
+        MS_ENTRA_CLIENT_ID="11111111-1111-1111-1111-111111111111",
+        MS_ENTRA_CLIENT_SECRET="Az9-client-secret-with-diversity-123456",
+        MS_ENTRA_TENANT_ID="22222222-2222-2222-2222-222222222222",
+        MS_ENTRA_REDIRECT_URI="https://app.example.test/auth/callback",
+        REDIS_URL="rediss://:password@redis.example.test:6380/0",
+        REDIS_TLS_REQUIRED="true",
+        SESSION_COOKIE_SECURE="true",
+        TESTING="false",
+        DEBUG="false",
+        WTF_CSRF_ENABLED="true",
+    )
+
+
+def test_development_settings_are_normalized_and_namespaced() -> None:
+    settings = AppSettings.from_env(
+        valid_env(
+            APP_ENV="development",
+            APP_LOG_LEVEL="debug",
+            APP_LOG_FORMAT="json",
+            APP_TRUSTED_HOSTS="localhost,localhost:5000,[::1]:5000",
+            SESSION_NAMESPACE="custom:development",
+            SESSION_REFRESH_EACH_REQUEST="false",
+            SESSION_COOKIE_SAMESITE="strict",
+            CSP_SCRIPT_SRC_EXTRA="https://cdn.example.test,https://cdn.example.test",
+            PERMISSIONS_POLICY_FEATURES="camera,geolocation",
+            PROXY_X_FOR="1",
+            PROXY_X_PROTO="1",
+        )
+    )
+    assert settings.log_level == "DEBUG"
+    assert settings.cookie_samesite == "Strict"
+    assert settings.trusted_hosts == ("localhost", "localhost:5000", "[::1]:5000")
+    assert settings.csp_script_src_extra == ("https://cdn.example.test",)
+    assert settings.proxy_hops == ProxyHops(x_for=1, x_proto=1)
+    assert settings.session_key_prefix == "custom:development:session:"
+    assert settings.auth_storage_key_prefix == "custom:development:auth:"
+    assert settings.revocation_key_prefix == "custom:development:revocation:"
+    config = settings.flask_config()
+    assert config["SESSION_COOKIE_NAME"] == "test_app_session"
+    assert config["MS_ENTRA_POST_LOGIN_REDIRECT_URI"] == "/"
+    assert config["MS_ENTRA_POST_LOGOUT_REDIRECT_URI"] == "/login"
+    assert settings.create_session_codec().idle_timeout_seconds == 3600
+
+
+def test_production_requires_and_emits_secure_configuration() -> None:
+    settings = AppSettings.from_env(production_env())
+    config = settings.flask_config()
+    assert config["SESSION_COOKIE_NAME"] == "__Host-test_app_session"
+    assert config["SESSION_COOKIE_SECURE"] is True
+    assert config["MS_ENTRA_STRICT_SECURITY"] is True
+    assert config["PREFERRED_URL_SCHEME"] == "https"
+    assert settings.create_redis_client().connection_pool.connection_kwargs["ssl_cert_reqs"] == "required"
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"APP_ENV": "staging"}, "APP_ENV"),
+        ({"APP_SECRET_KEY": "short"}, "APP_SECRET_KEY"),
+        ({"APP_BASE_URL": "https://user:pass@example.test"}, "APP_BASE_URL"),
+        ({"APP_BASE_URL": "http://example.test"}, "HTTPS"),
+        ({"APP_BASE_URL": "http://localhost:5000/path"}, "origin"),
+        ({"APP_TRUSTED_HOSTS": "*.example.test"}, "exact hosts"),
+        ({"APP_TRUSTED_HOSTS": "[::1]:0"}, "port"),
+        ({"MS_ENTRA_TENANT_ID": "common"}, "one tenant"),
+        ({"MS_ENTRA_REDIRECT_URI": "http://localhost:5000/"}, "callback"),
+        ({"MS_ENTRA_REDIRECT_URI": "http://localhost:5000/a//b"}, "ambiguous"),
+        ({"MS_ENTRA_REDIRECT_URI": "http://localhost:5000/%2Fcallback"}, "callback"),
+        ({"MS_ENTRA_POST_LOGIN_REDIRECT_URI": "//evil.test"}, "local"),
+        ({"MS_ENTRA_POST_LOGOUT_REDIRECT_URI": "/login?next=/"}, "local"),
+        ({"REDIS_URL": "https://redis.example.test"}, "redis/rediss"),
+        ({"REDIS_URL": "redis://localhost:6379/0?socket_timeout=99"}, "controlled"),
+        ({"REDIS_TLS_REQUIRED": "maybe"}, "boolean"),
+        ({"SESSION_NAMESPACE": "bad namespace"}, "SESSION_NAMESPACE"),
+        ({"SESSION_LIFETIME_SECONDS": "0"}, "positive"),
+        ({"SESSION_ABSOLUTE_TIMEOUT_SECONDS": "10"}, "shorter"),
+        ({"SESSION_SID_RENEWAL_SECONDS": "28800"}, "shorter"),
+        ({"SESSION_ACTIVITY_UPDATE_SECONDS": "3601"}, "idle"),
+        ({"SESSION_CLOCK_SKEW_SECONDS": "301"}, "between"),
+        ({"SESSION_ALLOWED_KEYS": "bad key"}, "codec"),
+        ({"SESSION_COOKIE_SAMESITE": "invalid"}, "SESSION_COOKIE_SAMESITE"),
+        ({"SESSION_COOKIE_SAMESITE": "None"}, "SESSION_COOKIE_SECURE"),
+        ({"CSP_SCRIPT_SRC_EXTRA": "*"}, "weaken"),
+        ({"CSP_STYLE_SRC_EXTRA": "http://cdn.example.test"}, "HTTPS origins"),
+        ({"CSP_IMG_SRC_EXTRA": "https://user:pass@cdn.example.test"}, "HTTPS origins"),
+        ({"PERMISSIONS_POLICY_FEATURES": "camera,bad feature"}, "invalid feature"),
+        ({"PROXY_X_FOR": "6"}, "between"),
+    ],
+)
+def test_invalid_environment_values_fail_fast(
+    override: dict[str, str],
+    message: str,
+) -> None:
+    with pytest.raises(SettingsError, match=message):
+        AppSettings.from_env(valid_env(**override))
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"APP_BASE_URL": "http://localhost:5000"},
+        {"REDIS_URL": "redis://redis.example.test:6379/0"},
+        {"SESSION_COOKIE_SECURE": "false"},
+        {"TESTING": "true"},
+        {"DEBUG": "true"},
+        {"WTF_CSRF_ENABLED": "false"},
+        {"SESSION_SCHEMA_STRICT": "false"},
+    ],
+)
+def test_production_rejects_downgrades(override: dict[str, str]) -> None:
+    environment = production_env()
+    environment.update(override)
+    with pytest.raises(SettingsError):
+        AppSettings.from_env(environment)
+
+
+def test_production_secrets_must_be_independent() -> None:
+    environment = production_env()
+    environment["WTF_CSRF_SECRET_KEY"] = environment["APP_SECRET_KEY"]
+    with pytest.raises(SettingsError, match="independent"):
+        AppSettings.from_env(environment)
+
+
+def test_secret_file_support_and_conflicts(tmp_path: Path) -> None:
+    secret_file = tmp_path / "secret"
+    secret_file.write_text(cryptographic_key(20) + "\n", encoding="utf-8")
+    environment = valid_env()
+    del environment["APP_SECRET_KEY"]
+    environment["APP_SECRET_KEY_FILE"] = str(secret_file.resolve())
+    assert AppSettings.from_env(environment).secret_key == cryptographic_key(20)
+    environment["APP_SECRET_KEY"] = cryptographic_key(21)
+    with pytest.raises(SettingsError, match="cannot be configured together"):
+        AppSettings.from_env(environment)
+
+
+def test_programmatic_settings_are_revalidated(settings: AppSettings) -> None:
+    with pytest.raises(SettingsError, match="proxy hop"):
+        replace(settings, proxy_hops=ProxyHops(x_for=-1)).validate()
+    with pytest.raises(SettingsError, match="same origin"):
+        replace(settings, redirect_uri="http://127.0.0.1:5000/auth/callback").validate()
+
+{% if include_graph_example %}
+def test_graph_example_requires_user_read() -> None:
+    with pytest.raises(SettingsError, match=r"User\.Read"):
+        AppSettings.from_env(valid_env(MS_ENTRA_SCOPES="Mail.Read"))
+{% endif %}

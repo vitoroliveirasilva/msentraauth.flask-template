@@ -1,359 +1,118 @@
-name: CI
+name: Template CI
 
 on:
   push:
-    branches: [dev, prod]
   pull_request:
-    branches: [dev, prod]
 
 permissions: {}
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  PIP_DISABLE_PIP_VERSION_CHECK: "1"
-
 jobs:
-  supply-chain:
-    name: Supply-chain policy
+  generator:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.14"
+          python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements/*.constraints.txt
-      - name: Validate immutable inputs and policies
-        run: python scripts/validate_supply_chain.py
+          cache-dependency-path: requirements/generator.constraints.txt
+      - name: Install pinned generator tooling
+        run: >-
+          python -m pip install
+          --constraint requirements/generator.constraints.txt
+          copier jinja2 mypy pytest pyyaml ruff
+      - run: ruff check template_tests scripts/check_generated_project.py
+      - run: mypy template_tests scripts/check_generated_project.py
+      - run: pytest -q
 
-  tests:
-    name: Tests (Python ${{ matrix.python-version }})
+  generated-project:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 35
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - project_name: Acme Portal
+            project_slug: acme-portal
+            package_name: acme_portal
+            graph: false
+            python: "3.12"
+            container: true
+          - project_name: Portal Operacional Brasil
+            project_slug: portal-operacional-brasil
+            package_name: portal_operacional_brasil
+            graph: true
+            python: "3.13"
+            container: false
+          - project_name: Ops Web
+            project_slug: ops-web
+            package_name: ops_core
+            graph: false
+            python: "3.14"
+            container: false
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: requirements/*.constraints.txt
-      - name: Install pinned pip
+          cache-dependency-path: |
+            requirements/generator.constraints.txt
+            template/requirements/*.constraints.txt
+      - name: Install Copier
         run: >-
           python -m pip install
-          --constraint requirements/build.constraints.txt
-          pip==26.1.2
-      - name: Install constrained development environment
-        run: >-
-          python -m pip install
-          --constraint requirements/development.constraints.txt
-          -e ".[dev]"
-      - name: Compile
-        run: python -m compileall -q src tests scripts
-      - name: Test with full coverage
-        run: pytest
-
-  quality:
-    name: Quality and security
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements/*.constraints.txt
-      - name: Install pinned pip
-        run: >-
-          python -m pip install
-          --constraint requirements/build.constraints.txt
-          pip==26.1.2
-      - name: Install constrained development environment
-        run: >-
-          python -m pip install
-          --constraint requirements/development.constraints.txt
-          -e ".[dev]"
-      - name: Ruff lint
-        run: ruff check .
-      - name: Ruff format
-        run: ruff format --check .
-      - name: Type check
-        run: mypy src tests
-      - name: Static security audit
-        run: bandit -c pyproject.toml -r src scripts
-      - name: Dependency audit
-        run: pip-audit --local
-
-  redis-integration:
-    name: Real Redis integration
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements/*.constraints.txt
-      - name: Install pinned pip
-        run: >-
-          python -m pip install
-          --constraint requirements/build.constraints.txt
-          pip==26.1.2
-      - name: Install constrained development environment
-        run: >-
-          python -m pip install
-          --constraint requirements/development.constraints.txt
-          -e ".[dev]"
-      - name: Start authenticated Redis
+          --constraint requirements/generator.constraints.txt
+          copier
+      - name: Render with the official Copier engine
         run: |
-          set -euo pipefail
-          docker run --detach \
-            --name msentra-redis-integration \
-            --publish 127.0.0.1:6379:6379 \
-            redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005 \
-            redis-server --save "" --appendonly no \
-            --requirepass ci-redis-password-not-used-outside-actions
-          for attempt in {1..20}; do
-            if docker exec msentra-redis-integration redis-cli \
-              --no-auth-warning \
-              -a ci-redis-password-not-used-outside-actions ping \
-              | grep -qx PONG; then
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs msentra-redis-integration
-          exit 1
-      - name: Exercise factory, readiness and atomic storage
-        env:
-          APP_ENV: development
-          APP_SECRET_KEY: ci-session-secret-with-at-least-32-chars
-          APP_BASE_URL: http://localhost:5000
-          APP_TRUSTED_HOSTS: localhost,127.0.0.1
-          APP_LOG_FORMAT: json
-          MS_ENTRA_CLIENT_ID: ci-client-id
-          MS_ENTRA_CLIENT_SECRET: ci-client-secret-with-at-least-24-chars
-          MS_ENTRA_TENANT_ID: ci.example.com
-          MS_ENTRA_REDIRECT_URI: http://localhost:5000/auth/callback
-          REDIS_URL: redis://:ci-redis-password-not-used-outside-actions@localhost:6379/0
-          REDIS_TLS_REQUIRED: "false"
-          SESSION_COOKIE_SECURE: "false"
-          WTF_CSRF_ENABLED: "false"
+          copier copy --trust --defaults \
+            --data project_name="${{ matrix.project_name }}" \
+            --data project_slug="${{ matrix.project_slug }}" \
+            --data package_name="${{ matrix.package_name }}" \
+            --data include_graph_example=${{ matrix.graph }} \
+            --data python_version="${{ matrix.python }}" \
+            . rendered
+          test -f rendered/.copier-answers.yml
+      - run: python scripts/check_generated_project.py rendered
+      - name: Install generated project and pinned quality tooling
         run: |
-          python - <<'PY'
-          from msentraauth_template import create_app
-          from msentraauth_template.storage import RedisAuthStorage
-
-          app = create_app()
-          client = app.test_client()
-          assert client.get("/health/live").status_code == 200
-          assert client.get("/health/ready").status_code == 200
-          storage = RedisAuthStorage(app.extensions["template_redis"])
-          storage.save("integration", b"once", ttl=30)
-          assert storage.take("integration") == b"once"
-          assert storage.take("integration") is None
-          PY
-      - name: Stop Redis
-        if: always()
-        run: docker rm -f msentra-redis-integration >/dev/null 2>&1 || true
-
-  package:
-    name: Build, inspect and inventory package
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements/*.constraints.txt
-      - name: Install pinned pip
-        run: >-
-          python -m pip install
-          --constraint requirements/build.constraints.txt
-          pip==26.1.2
-      - name: Install constrained build tooling
-        run: >-
-          python -m pip install
-          --constraint requirements/development.constraints.txt
-          -e ".[dev]"
-      - name: Build artifacts
-        run: python -m build
-      - name: Validate metadata
-        run: python -m twine check dist/*
-      - name: Inspect artifacts
-        env:
-          DIST_DIR: dist
-        run: pytest tests/test_distribution.py --no-cov
-      - name: Generate checksums
-        run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS
-      - name: Install wheel in a clean environment
-        run: |
-          python -m venv .package-venv
-          .package-venv/bin/python -m pip install \
-            --constraint requirements/build.constraints.txt \
+          python -m pip install \
+            --constraint rendered/requirements/build.constraints.txt \
             pip==26.1.2
-          .package-venv/bin/python -m pip install \
-            --constraint requirements/runtime.constraints.txt \
-            dist/*.whl
-          .package-venv/bin/python -m pip check
-          .package-venv/bin/python - <<'PY'
-          from importlib.metadata import version
-          from pathlib import Path
-          import tomllib
-
-          import msentraauth_template
-
-          expected = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-          assert callable(msentraauth_template.create_app)
-          assert version("msentraauth-flask-template") == expected
-          PY
-      - name: Generate reproducible runtime SBOM
-        run: >-
-          cyclonedx-py environment
-          --output-reproducible
-          --output-format JSON
-          --output-file dist/python-environment.cdx.json
-          .package-venv/bin/python
-      - name: Upload validated package materials
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: python-package-${{ github.sha }}
-          path: |
-            dist/*.whl
-            dist/*.tar.gz
-            dist/SHA256SUMS
-            dist/python-environment.cdx.json
-          if-no-files-found: error
-          retention-days: 14
-
-  docker:
-    name: Docker build, smoke and scan
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Validate Compose
+          python -m pip install \
+            --constraint rendered/requirements/development.constraints.txt \
+            -e './rendered[dev]'
+          python -m pip check
+      - run: python -m compileall -q src tests scripts
+        working-directory: rendered
+      - run: ruff check src tests scripts gunicorn.conf.py wsgi.py
+        working-directory: rendered
+      - run: mypy src
+        working-directory: rendered
+      - run: pytest
+        working-directory: rendered
+      - run: bandit -q -r src
+        working-directory: rendered
+      - run: python -m build
+        working-directory: rendered
+      - name: Validate Compose configuration
         run: |
-          cp .env.example .env
-          sed -i 's/substitua-por-uma-senha-redis-local-forte/ci-compose-password-not-used-elsewhere/g' .env
-          docker compose config --quiet
-      - name: Build image
-        run: docker build --tag msentraauth-flask-template:ci .
-      - name: Verify non-root runtime
-        run: test "$(docker run --rm --entrypoint id msentraauth-flask-template:ci -u)" = "10001"
-      - name: Smoke test image with Redis
-        run: |
-          set -euo pipefail
-          network="msentra-ci-${{ github.run_id }}"
-          redis_container="msentra-redis-${{ github.run_id }}"
-          app_container="msentra-app-${{ github.run_id }}"
-          redis_password="ci-container-password-not-used-elsewhere"
-          cleanup() {
-            docker rm -f "$app_container" "$redis_container" >/dev/null 2>&1 || true
-            docker network rm "$network" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-          docker network create --internal "$network"
-          redis_args=(
-            docker run --detach
-            --name "$redis_container"
-            --network "$network"
-            redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
-            redis-server --save "" --appendonly no --requirepass "$redis_password"
-          )
-          "${redis_args[@]}"
-          app_args=(
-            docker run --detach
-            --name "$app_container"
-            --network "$network"
-            --publish 127.0.0.1:18000:8000
-            --read-only
-            --tmpfs /tmp:size=64m,noexec,nosuid,nodev
-            --cap-drop ALL
-            --pids-limit 256
-            --memory 512m
-            --cpus 1
-            --security-opt no-new-privileges:true
-            --env APP_ENV=development
-            --env APP_SECRET_KEY=ci-container-session-secret-with-at-least-32-characters
-            --env APP_BASE_URL=http://localhost:18000
-            --env APP_TRUSTED_HOSTS=localhost,127.0.0.1
-            --env APP_LOG_FORMAT=json
-            --env MS_ENTRA_CLIENT_ID=ci-container-client-id
-            --env MS_ENTRA_CLIENT_SECRET=ci-container-client-secret-with-at-least-24-characters
-            --env MS_ENTRA_TENANT_ID=ci-container.example.com
-            --env MS_ENTRA_REDIRECT_URI=http://localhost:18000/auth/callback
-            --env MS_ENTRA_SCOPES=User.Read
-            --env "REDIS_URL=redis://:${redis_password}@${redis_container}:6379/0"
-            --env REDIS_TLS_REQUIRED=false
-            --env SESSION_COOKIE_SECURE=false
-            --env WTF_CSRF_ENABLED=false
-            msentraauth-flask-template:ci
-          )
-          "${app_args[@]}"
-          for attempt in {1..30}; do
-            if curl --fail --silent --show-error \
-              http://127.0.0.1:18000/health/live >/dev/null \
-              && curl --fail --silent --show-error \
-                http://127.0.0.1:18000/health/ready >/dev/null; then
-              exit 0
-            fi
-            sleep 2
-          done
-          docker logs "$app_container"
-          exit 1
-      - name: Scan final image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: msentraauth-flask-template:ci
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
-          scanners: vuln,secret,misconfig
+          cp rendered/.env.example rendered/.env
+          docker compose --project-directory rendered config --quiet
+      - name: Build generated container
+        if: matrix.container
+        run: docker build --tag generated-template:ci rendered

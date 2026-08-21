@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import json
+import logging
+
+import pytest
+from flask import Flask
+
+from conftest import RedisDouble, valid_env
+from {{ package_name }} import create_app
+from {{ package_name }}.auth.callback_alias import CallbackAliasError, register_callback_alias
+from {{ package_name }}.infrastructure.observability import JsonLogFormatter, TextLogFormatter
+from {{ package_name }}.infrastructure.security import build_csp
+from {{ package_name }}.settings import AppSettings
+
+
+def test_factory_renders_namespaced_ui_and_security_headers(
+    settings: AppSettings,
+    redis_double: RedisDouble,
+    msal_factory: object,
+) -> None:
+    app = create_app(
+        settings,
+        redis_client=redis_double,
+        msal_client_factory=msal_factory,  # type: ignore[arg-type]
+    )
+    client = app.test_client()
+    home = client.get("/", headers={"X-Request-ID": "request-12345678"})
+    assert home.status_code == 200
+    assert b"{" + b"% extends" not in home.data
+    assert b"Test App" in home.data
+    assert home.headers["X-Request-ID"] == "request-12345678"
+    assert home.headers["Content-Security-Policy"].startswith("default-src 'self'")
+    assert home.headers["X-Frame-Options"] == "DENY"
+    assert home.headers["Cache-Control"] == "no-store, max-age=0"
+    login = client.get("/login")
+    assert login.status_code == 200
+    assert b"Continuar com Microsoft" in login.data
+    assert client.get("/health/live").json == {"status": "ok"}
+    assert client.get("/health/ready").json == {"status": "ready"}
+    assert not redis_double.values
+
+
+def test_readiness_fails_closed_for_redis_errors(
+    settings: AppSettings,
+    redis_double: RedisDouble,
+    msal_factory: object,
+) -> None:
+    app = create_app(
+        settings,
+        redis_client=redis_double,
+        msal_client_factory=msal_factory,  # type: ignore[arg-type]
+    )
+    client = app.test_client()
+    redis_double.ping_result = False
+    assert client.get("/health/ready").status_code == 503
+    redis_double.ping_result = True
+    redis_double.fail = "set"
+    assert client.get("/health/ready").status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("path", "status"),
+    [("/missing", 404), ("/health/live", 405)],
+)
+def test_error_pages_are_generic_and_cache_disabled(
+    settings: AppSettings,
+    redis_double: RedisDouble,
+    msal_factory: object,
+    path: str,
+    status: int,
+) -> None:
+    app = create_app(
+        settings,
+        redis_client=redis_double,
+        msal_client_factory=msal_factory,  # type: ignore[arg-type]
+    )
+    response = app.test_client().post(path)
+    assert response.status_code == status
+    assert response.headers["Cache-Control"] == "no-store, max-age=0"
+    assert b"Traceback" not in response.data
+
+
+def test_custom_callback_alias_is_registered(
+    redis_double: RedisDouble,
+    msal_factory: object,
+) -> None:
+    settings = AppSettings.from_env(
+        valid_env(MS_ENTRA_REDIRECT_URI="http://localhost:5000/signin/callback")
+    )
+    app = create_app(
+        settings,
+        redis_client=redis_double,
+        msal_client_factory=msal_factory,  # type: ignore[arg-type]
+    )
+    rules = {rule.rule for rule in app.url_map.iter_rules()}
+    assert "/signin/callback" in rules
+    with pytest.raises(CallbackAliasError, match="already registered"):
+        register_callback_alias(app, settings.redirect_uri)
+
+
+def test_callback_alias_requires_extension_endpoint() -> None:
+    app = Flask("callback-test")
+    with pytest.raises(CallbackAliasError, match="not registered"):
+        register_callback_alias(app, "http://localhost/custom/callback")
+    for path in ("http://localhost//bad", "http://localhost/../bad"):
+        with pytest.raises(CallbackAliasError, match="safe callback"):
+            register_callback_alias(app, path)
+
+
+def test_csp_builder_uses_explicit_origins_only(settings: AppSettings) -> None:
+    configured = AppSettings.from_env(
+        valid_env(
+            CSP_SCRIPT_SRC_EXTRA="https://scripts.example.test",
+            CSP_CONNECT_SRC_EXTRA="https://api.example.test",
+        )
+    )
+    csp = build_csp(configured)
+    assert "script-src 'self' https://scripts.example.test" in csp
+    assert "connect-src 'self' https://api.example.test" in csp
+    assert "unsafe-inline" not in csp
+    assert "*" not in csp
+    assert "frame-ancestors 'none'" in build_csp(settings)
+
+
+def test_log_formatters_escape_newlines_and_bound_messages() -> None:
+    record = logging.LogRecord(
+        "test",
+        logging.INFO,
+        __file__,
+        1,
+        "line one\nline two %s",
+        ("value",),
+        None,
+    )
+    record.request_id = "request-12345678"
+    rendered_json = JsonLogFormatter().format(record)
+    payload = json.loads(rendered_json)
+    assert payload["message"] == "line one\\nline two value"
+    assert payload["request_id"] == "request-12345678"
+    rendered_text = TextLogFormatter().format(record)
+    assert "line one\\nline two value" in rendered_text
+    assert "request_id=\"request-12345678\"" in rendered_text

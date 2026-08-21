@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import pytest
+from flask_ms_entra_auth import AtomicAuthStorage, AuthStorage, StorageError
+
+from conftest import RedisDouble
+from {{ package_name }}.infrastructure.storage import RedisAuthStorage
+
+
+def test_storage_contract_round_trip_and_atomic_take(redis_double: RedisDouble) -> None:
+    storage = RedisAuthStorage(redis_double, key_prefix="app:test:auth:")
+    assert isinstance(storage, AuthStorage)
+    assert isinstance(storage, AtomicAuthStorage)
+    assert storage.client is redis_double
+    assert storage.key_prefix == "app:test:auth:"
+    storage.save("flow:abc", b"value", ttl=30)
+    assert storage.load("flow:abc") == b"value"
+    assert storage.take("flow:abc") == b"value"
+    assert storage.take("flow:abc") is None
+    storage.delete("missing")
+
+
+@pytest.mark.parametrize("value", ["text", bytearray(b"value")])
+def test_save_rejects_non_bytes(redis_double: RedisDouble, value: object) -> None:
+    with pytest.raises(TypeError, match="bytes"):
+        RedisAuthStorage(redis_double, key_prefix="app:test:auth:").save(
+            "key", value  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("ttl", [0, -1, True, 1.5])
+def test_save_rejects_invalid_ttl(redis_double: RedisDouble, ttl: object) -> None:
+    with pytest.raises(ValueError, match="ttl"):
+        RedisAuthStorage(redis_double, key_prefix="app:test:auth:").save(
+            "key", b"value", ttl=ttl  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("prefix", ["", "missing-colon", "bad space:", "x" * 129 + ":"])
+def test_invalid_client_and_prefix_are_rejected(redis_double: RedisDouble, prefix: str) -> None:
+    with pytest.raises(ValueError, match="key_prefix"):
+        RedisAuthStorage(redis_double, key_prefix=prefix)
+    with pytest.raises(TypeError, match="client"):
+        RedisAuthStorage(object(), key_prefix="app:test:auth:")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("key", ["", "../escape", "bad key", "x" * 257])
+def test_external_keys_are_validated(redis_double: RedisDouble, key: str) -> None:
+    storage = RedisAuthStorage(redis_double, key_prefix="app:test:auth:")
+    with pytest.raises(StorageError, match="key"):
+        storage.load(key)
+
+
+@pytest.mark.parametrize(
+    ("operation", "call"),
+    [
+        ("get", lambda storage: storage.load("key")),
+        ("set", lambda storage: storage.save("key", b"value")),
+        ("delete", lambda storage: storage.delete("key")),
+        ("eval", lambda storage: storage.take("key")),
+    ],
+)
+def test_backend_errors_are_wrapped_without_secret_leakage(
+    redis_double: RedisDouble,
+    operation: str,
+    call: Callable[[RedisAuthStorage], object],
+) -> None:
+    redis_double.fail = operation
+    storage = RedisAuthStorage(redis_double, key_prefix="app:test:auth:")
+    with pytest.raises(StorageError) as raised:
+        call(storage)
+    assert "redis-secret" not in str(raised.value)
+
+
+def test_invalid_backend_values_and_false_writes_fail(redis_double: RedisDouble) -> None:
+    storage = RedisAuthStorage(redis_double, key_prefix="app:test:auth:")
+    redis_double.return_invalid = True
+    with pytest.raises(StorageError, match="invalid"):
+        storage.load("key")
+    redis_double.return_invalid = False
+    redis_double.return_false = True
+    with pytest.raises(StorageError, match="save"):
+        storage.save("key", b"value")

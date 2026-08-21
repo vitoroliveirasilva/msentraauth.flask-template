@@ -1,0 +1,13 @@
+{% extends "layout/base.html" %}
+{% block title %}Perfil · {{ app_display_name }}{% endblock %}
+{% block content %}
+<section class="card">
+  <p class="eyebrow">Microsoft Graph</p>
+  <h1>{{ profile.display_name }}</h1>
+  <dl>
+    <dt>ID</dt><dd>{{ profile.id }}</dd>
+    <dt>Usuário</dt><dd>{{ profile.user_principal_name or "—" }}</dd>
+    <dt>E-mail</dt><dd>{{ profile.mail or "—" }}</dd>
+  </dl>
+</section>
+{% endblock %}
