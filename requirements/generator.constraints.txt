@@ -1,6 +1,6 @@
-copier==9.17.0
+copier==9.17.1
 Jinja2==3.1.6
-mypy==2.3.0
+mypy==2.3.1
 pytest==9.1.1
 PyYAML==6.0.3
-ruff==0.15.22
+ruff==0.16.3
