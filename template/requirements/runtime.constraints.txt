@@ -1,4 +1,4 @@
-cryptography==46.0.4
+cryptography==50.0.0
 Flask==3.1.3
 Flask-WTF==1.3.0
 flask-ms-entra-auth==1.0.0
