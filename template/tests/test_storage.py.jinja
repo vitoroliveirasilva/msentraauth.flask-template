@@ -5,8 +5,9 @@ from collections.abc import Callable
 import pytest
 from flask_ms_entra_auth import AtomicAuthStorage, AuthStorage, StorageError
 
-from conftest import RedisDouble
 from {{ package_name }}.infrastructure.storage import RedisAuthStorage
+
+from conftest import RedisDouble
 
 
 def test_storage_contract_round_trip_and_atomic_take(redis_double: RedisDouble) -> None:

@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from conftest import cryptographic_key, valid_env
 from {{ package_name }}.settings import AppSettings, ProxyHops, SettingsError
+
+from conftest import cryptographic_key, valid_env
 
 
 def production_env() -> dict[str, str]:

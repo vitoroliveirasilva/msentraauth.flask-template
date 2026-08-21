@@ -6,12 +6,19 @@ import logging
 import pytest
 from flask import Flask
 
-from conftest import RedisDouble, valid_env
 from {{ package_name }} import create_app
-from {{ package_name }}.auth.callback_alias import CallbackAliasError, register_callback_alias
-from {{ package_name }}.infrastructure.observability import JsonLogFormatter, TextLogFormatter
+from {{ package_name }}.auth.callback_alias import (
+    CallbackAliasError,
+    register_callback_alias,
+)
+from {{ package_name }}.infrastructure.observability import (
+    JsonLogFormatter,
+    TextLogFormatter,
+)
 from {{ package_name }}.infrastructure.security import build_csp
 from {{ package_name }}.settings import AppSettings
+
+from conftest import RedisDouble, valid_env
 
 
 def test_factory_renders_namespaced_ui_and_security_headers(

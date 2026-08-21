@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 from flask import Flask, Response, session
 
-from conftest import RedisDouble, session_app
 from {{ package_name }}.infrastructure.session_backend import (
     RedisSession,
     RedisSessionInterface,
@@ -11,6 +10,8 @@ from {{ package_name }}.infrastructure.session_backend import (
     SessionBackendUnavailable,
     register_session_backend_guard,
 )
+
+from conftest import RedisDouble, session_app
 
 
 class Clock:

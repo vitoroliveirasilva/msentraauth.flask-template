@@ -48,6 +48,7 @@ target-version = "py{{ python_version|replace('.', '') }}"
 select = ["B", "E4", "E7", "E9", "F", "I", "RUF", "SIM", "UP"]
 [tool.ruff.lint.isort]
 known-first-party = ["{{ package_name }}"]
+known-local-folder = ["conftest"]
 [tool.mypy]
 python_version = "{{ python_version }}"
 strict = true
